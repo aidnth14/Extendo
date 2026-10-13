@@ -86,6 +86,10 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_, Cor
 
 ConfigureDialog::~ConfigureDialog() = default;
 
+void ConfigureDialog::SetActiveTab(int index) {
+    ui->tabWidget->setCurrentIndex(index);
+}
+
 void ConfigureDialog::SetConfiguration() {
     general_tab->SetConfiguration();
     system_tab->SetConfiguration();

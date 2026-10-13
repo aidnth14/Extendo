@@ -847,6 +847,12 @@ void QtConfig::ReadUIValues() {
         UISettings::values.theme =
             ReadSetting(Settings::QKeys::theme, QString::fromUtf8(UISettings::themes[0].second))
                 .toString();
+        UISettings::values.home_background_path =
+            ReadSetting(QStringLiteral("home_background_path"), QString()).toString();
+        UISettings::values.home_font_family =
+            ReadSetting(QStringLiteral("home_font_family"), QString()).toString();
+        UISettings::values.home_font_size =
+            ReadSetting(QStringLiteral("home_font_size"), 10).toInt();
 #ifdef ENABLE_DISCORD_RPC
         ReadBasicSetting(UISettings::values.enable_discord_presence);
 #endif
@@ -1383,6 +1389,11 @@ void QtConfig::SaveUIValues() {
     if (global) {
         WriteSetting(Settings::QKeys::theme, UISettings::values.theme,
                      QString::fromUtf8(UISettings::themes[0].second));
+        WriteSetting(QStringLiteral("home_background_path"), UISettings::values.home_background_path,
+                     QString());
+        WriteSetting(QStringLiteral("home_font_family"), UISettings::values.home_font_family,
+                     QString());
+        WriteSetting(QStringLiteral("home_font_size"), UISettings::values.home_font_size, 10);
 #ifdef ENABLE_DISCORD_RPC
         WriteBasicSetting(UISettings::values.enable_discord_presence);
 #endif

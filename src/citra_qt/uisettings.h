@@ -141,6 +141,10 @@ struct Values {
 
     QString theme;
 
+    QString home_background_path;
+    QString home_font_family;
+    int home_font_size = 10;
+
     // Shortcut name <Shortcut, context>
     std::vector<Shortcut> shortcuts;
 

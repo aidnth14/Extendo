@@ -37,6 +37,7 @@ class EmuThread;
 class GameList;
 enum class GameListOpenTarget;
 class GameListPlaceholder;
+class HomeScreenWidget;
 enum class GameListShortcutTarget;
 class GImageInfo;
 class GPUCommandListWidget;
@@ -60,6 +61,8 @@ class QLabel;
 class QProgressBar;
 class QPushButton;
 class QSlider;
+class QToolBar;
+class QToolButton;
 class RegistersWidget;
 class WaitTreeWidget;
 
@@ -266,6 +269,8 @@ private slots:
     void OnCIAInstallFinished();
     void OnMenuRecentFile();
     void OnConfigure();
+    void OnEscapePressed();
+    void OnQuickSettings();
     void OnLoadAmiibo();
     void OnRemoveAmiibo();
     void OnOpenCitraFolder();
@@ -355,6 +360,7 @@ private:
     GRenderWindow* secondary_window;
 
     GameListPlaceholder* game_list_placeholder;
+    HomeScreenWidget* home_screen;
     LoadingScreen* loading_screen;
 
     // Status bar elements

@@ -11,6 +11,10 @@ namespace Ui {
 class ConfigureUi;
 }
 
+class QFontComboBox;
+class QLineEdit;
+class QSpinBox;
+
 class ConfigureUi : public QWidget {
     Q_OBJECT
 

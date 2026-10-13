@@ -71,6 +71,7 @@
 #include "citra_qt/dumping/dumping_dialog.h"
 #endif
 #include "citra_qt/game_list.h"
+#include "citra_qt/home_screen.h"
 #include "citra_qt/hotkeys.h"
 #include "citra_qt/loading_screen.h"
 #include "citra_qt/movie/movie_play_dialog.h"
@@ -566,10 +567,35 @@ void GMainWindow::InitializeWidgets() {
 #endif
     game_list = new GameList(*play_time_manager, this);
     ui->horizontalLayout->addWidget(game_list);
+    game_list->hide();
 
     game_list_placeholder = new GameListPlaceholder(this);
     ui->horizontalLayout->addWidget(game_list_placeholder);
     game_list_placeholder->setVisible(false);
+
+    home_screen = new HomeScreenWidget(game_list->GetModel(), this);
+    ui->horizontalLayout->addWidget(home_screen);
+    connect(home_screen, &HomeScreenWidget::GameChosen, this, &GMainWindow::OnGameListLoadFile);
+    connect(home_screen, &HomeScreenWidget::AddDirectory, this,
+            &GMainWindow::OnGameListAddDirectory);
+    connect(home_screen, &HomeScreenWidget::OpenSettings, this, &GMainWindow::OnQuickSettings);
+    connect(home_screen, &HomeScreenWidget::OpenProfile, this, &GMainWindow::OnQuickSettings);
+    connect(home_screen, &HomeScreenWidget::OpenScreenshots, this, [this] {
+        QString path = QString::fromStdString(UISettings::values.screenshot_path.GetValue());
+        if (path.isEmpty()) {
+            path = QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir));
+        }
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    });
+    connect(home_screen, &HomeScreenWidget::PowerOff, this, &QMainWindow::close);
+    connect(home_screen, &HomeScreenWidget::BackgroundImageChanged, this,
+            [this] { config->Save(); });
+    connect(game_list, &GameList::PopulatingCompleted, home_screen, &HomeScreenWidget::Refresh);
+    home_screen->show();
+
+    auto* escape_shortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    escape_shortcut->setContext(Qt::ApplicationShortcut);
+    connect(escape_shortcut, &QShortcut::activated, this, &GMainWindow::OnEscapePressed);
 
     loading_screen = new LoadingScreen(this);
     loading_screen->hide();
@@ -1634,6 +1660,7 @@ void GMainWindow::BootGame(const QString& filename) {
     if (ui->action_Single_Window_Mode->isChecked()) {
         game_list->hide();
         game_list_placeholder->hide();
+        home_screen->hide();
     }
     status_bar_update_timer.start(1000);
 
@@ -1722,12 +1749,10 @@ void GMainWindow::ShutdownGame() {
     loading_screen->hide();
     loading_screen->Clear();
 
-    if (game_list->IsEmpty()) {
-        game_list_placeholder->show();
-    } else {
-        game_list->show();
-    }
-    game_list->SetFilterFocus();
+    game_list_placeholder->hide();
+    game_list->hide();
+    home_screen->Refresh();
+    home_screen->show();
 
     setMouseTracking(false);
 
@@ -2300,16 +2325,18 @@ void GMainWindow::OnGameListAddDirectory() {
     if (!UISettings::values.game_dirs.contains(game_dir)) {
         UISettings::values.game_dirs.append(game_dir);
         game_list->PopulateAsync(UISettings::values.game_dirs);
+        config->Save();
     } else {
         LOG_WARNING(Frontend, "Selected directory is already in the application list");
     }
 }
 
 void GMainWindow::OnGameListShowList(bool show) {
+    // home_screen always stays visible when idle; it swaps its own internal empty/populated
+    // sub-states via Refresh(). This signal predates that and no longer needs to hide anything.
     if (emulation_running && ui->action_Single_Window_Mode->isChecked())
         return;
-    game_list->setVisible(show);
-    game_list_placeholder->setVisible(!show);
+    home_screen->show();
 };
 
 void GMainWindow::OnGameListOpenPerGameProperties(const QString& file) {
@@ -2820,7 +2847,7 @@ void GMainWindow::ToggleWindowMode() {
         if (emulation_running) {
             render_window->setVisible(true);
             render_window->setFocus();
-            game_list->hide();
+            home_screen->hide();
         }
 
     } else {
@@ -2830,7 +2857,7 @@ void GMainWindow::ToggleWindowMode() {
         if (emulation_running) {
             render_window->setVisible(true);
             render_window->restoreGeometry(UISettings::values.renderwindow_geometry);
-            game_list->show();
+            home_screen->show();
         }
     }
 }
@@ -3029,6 +3056,20 @@ void GMainWindow::OnLoadState() {
     system.frame_limiter.AdvanceFrame();
 }
 
+void GMainWindow::OnEscapePressed() {
+    if (!emulation_running) {
+        close();
+        return;
+    }
+    const auto result =
+        QMessageBox::question(this, tr("Quit Session"),
+                              tr("Do you want to quit the current session?"),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (result == QMessageBox::Yes) {
+        ui->action_Stop->trigger();
+    }
+}
+
 void GMainWindow::OnConfigure() {
     game_list->SetDirectoryWatcherEnabled(false);
     Settings::SetConfiguringGlobal(true);
@@ -3081,6 +3122,44 @@ void GMainWindow::OnConfigure() {
         UpdateSecondaryWindowVisibility();
         UpdateBootHomeMenuState();
         UpdateStatusButtons();
+    } else {
+        Settings::values.input_profiles = old_input_profiles;
+        Settings::values.touch_from_button_maps = old_touch_from_button_maps;
+        Settings::LoadProfile(old_input_profile_index);
+    }
+}
+
+void GMainWindow::OnQuickSettings() {
+    game_list->SetDirectoryWatcherEnabled(false);
+    Settings::SetConfiguringGlobal(true);
+    ConfigureDialog configureDialog(this, hotkey_registry, system, gl_renderer, physical_devices,
+                                    !multiplayer_state->IsHostingPublicRoom());
+    configureDialog.SetActiveTab(5); // Graphics tab: resolution, shaders, render settings
+    connect(&configureDialog, &ConfigureDialog::LanguageChanged, this,
+            &GMainWindow::OnLanguageChanged);
+    auto old_theme = UISettings::values.theme;
+    const int old_input_profile_index = Settings::values.current_input_profile_index;
+    const auto old_input_profiles = Settings::values.input_profiles;
+    const auto old_touch_from_button_maps = Settings::values.touch_from_button_maps;
+    auto result = configureDialog.exec();
+    game_list->SetDirectoryWatcherEnabled(true);
+    if (result == QDialog::Accepted) {
+        configureDialog.ApplyConfiguration();
+        InitializeHotkeys();
+        if (UISettings::values.theme != old_theme) {
+            UpdateUITheme();
+        }
+        if (!multiplayer_state->IsHostingPublicRoom())
+            multiplayer_state->UpdateCredentials();
+        emit UpdateThemedIcons();
+        SyncMenuUISettings();
+        game_list->RefreshGameDirectory();
+        config->Save();
+        ReloadTurbo();
+        UpdateSecondaryWindowVisibility();
+        UpdateBootHomeMenuState();
+        UpdateStatusButtons();
+        home_screen->ApplyAppearanceSettings();
     } else {
         Settings::values.input_profiles = old_input_profiles;
         Settings::values.touch_from_button_maps = old_touch_from_button_maps;

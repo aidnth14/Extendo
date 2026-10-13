@@ -44,6 +44,7 @@ public:
     ~ConfigureDialog() override;
 
     void ApplyConfiguration();
+    void SetActiveTab(int index);
 
 private slots:
     void OnLanguageChanged(const QString& locale);
