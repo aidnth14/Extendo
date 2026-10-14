@@ -17,6 +17,10 @@ ConfigureUi::ConfigureUi(QWidget* parent)
                                     QString::fromUtf8(theme.second));
     }
 
+    // Values match UISettings::values.home_pill_position (0 = bottom, 1 = left).
+    ui->home_pill_position_combobox->addItem(tr("Bottom (horizontal)"), 0);
+    ui->home_pill_position_combobox->addItem(tr("Left (vertical)"), 1);
+
     SetConfiguration();
 }
 
@@ -68,6 +72,8 @@ void ConfigureUi::SetConfiguration() {
         UISettings::values.game_list_single_line_mode.GetValue());
     ui->show_advanced_frametime_info->setChecked(
         UISettings::values.show_advanced_frametime_info.GetValue());
+    ui->home_pill_position_combobox->setCurrentIndex(std::max(
+        0, ui->home_pill_position_combobox->findData(UISettings::values.home_pill_position)));
 }
 
 void ConfigureUi::ApplyConfiguration() {
@@ -82,6 +88,10 @@ void ConfigureUi::ApplyConfiguration() {
     UISettings::values.game_list_hide_no_icon = ui->toggle_hide_no_icon->isChecked();
     UISettings::values.game_list_single_line_mode = ui->toggle_single_line_mode->isChecked();
     UISettings::values.show_advanced_frametime_info = ui->show_advanced_frametime_info->isChecked();
+    UISettings::values.home_pill_position =
+        ui->home_pill_position_combobox
+            ->itemData(ui->home_pill_position_combobox->currentIndex())
+            .toInt();
 }
 
 void ConfigureUi::OnLanguageChanged(int index) {

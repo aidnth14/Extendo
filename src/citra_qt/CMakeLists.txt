@@ -226,6 +226,9 @@ file(GLOB COMPAT_LIST
      ${PROJECT_BINARY_DIR}/dist/compatibility_list/compatibility_list.json)
 file(GLOB_RECURSE ICONS ${PROJECT_SOURCE_DIR}/dist/icons/*)
 file(GLOB_RECURSE THEMES ${PROJECT_SOURCE_DIR}/dist/qt_themes/*)
+# home_screen_icons are NOT compiled in as a Qt resource (.qrc): they're copied as loose files
+# into Contents/Resources/home_icons/ by a POST_BUILD rule on the citra_meta target (see
+# src/citra_meta/CMakeLists.txt), so they can be swapped without a rebuild.
 
 if (ENABLE_QT_UPDATE_CHECKER)
     target_link_libraries(citra_qt PRIVATE httplib json-headers)

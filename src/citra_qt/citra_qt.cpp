@@ -2,15 +2,22 @@
 // Licensed under GPLv3 or any later version
 // Refer to the LICENSE.txt file included.
 
+#include <algorithm>
 #include <clocale>
 #include <format>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <thread>
 #include <unordered_map>
 #include <QFileDialog>
+#include <QFontDatabase>
 #include <QFutureWatcher>
+#include <QPropertyAnimation>
+#include <QStyleFactory>
+#include <QGraphicsDropShadowEffect>
 #include <QIcon>
 #include <QLabel>
 #include <QMessageBox>
@@ -579,19 +586,44 @@ void GMainWindow::InitializeWidgets() {
     connect(home_screen, &HomeScreenWidget::AddDirectory, this,
             &GMainWindow::OnGameListAddDirectory);
     connect(home_screen, &HomeScreenWidget::OpenSettings, this, &GMainWindow::OnQuickSettings);
-    connect(home_screen, &HomeScreenWidget::OpenProfile, this, &GMainWindow::OnQuickSettings);
-    connect(home_screen, &HomeScreenWidget::OpenScreenshots, this, [this] {
-        QString path = QString::fromStdString(UISettings::values.screenshot_path.GetValue());
-        if (path.isEmpty()) {
-            path = QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir));
-        }
-        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    // Profile opens the System page (console username, birthday, region), not Graphics — which
+    // is where the generic quick-settings entry point lands.
+    connect(home_screen, &HomeScreenWidget::OpenProfile, this, [this] {
+        ShowConfigureOverlay(1, !multiplayer_state->IsHostingPublicRoom()); // System tab
     });
     connect(home_screen, &HomeScreenWidget::PowerOff, this, &QMainWindow::close);
     connect(home_screen, &HomeScreenWidget::BackgroundImageChanged, this,
             [this] { config->Save(); });
     connect(game_list, &GameList::PopulatingCompleted, home_screen, &HomeScreenWidget::Refresh);
     home_screen->show();
+
+    // Floating Home button, shown only while a game is running (the home screen itself already
+    // has its own navigation) — lets you get back to the game shelf without hunting for the
+    // menu bar, matching the physical Home button on real Switch/3DS hardware.
+    home_button = new QToolButton(ui->centralwidget);
+    // No tooltip: these two buttons are only ever shown on top of the running game's
+    // Vulkan/MoltenVK surface, where native QToolTip popups render corrupted.
+    home_button->setFixedSize(48, 48);
+    home_button->setFocusPolicy(Qt::NoFocus);
+    // Icon smaller than the 48px button so it sits inside the themed disc drawn by
+    // ApplyOverlayButtonTheme() instead of running into its edge.
+    home_button->setIconSize(QSize(26, 26));
+    home_button->hide();
+    home_button->raise();
+    connect(home_button, &QToolButton::clicked, this, &GMainWindow::OnHomeButtonClicked);
+
+    ApplyOverlayButtonTheme();
+
+    // Thin draggable bar at the seam between the top and bottom 3DS screens, letting the user
+    // resize their relative heights by hand instead of only through the Layout settings tab.
+    screen_divider = new QWidget(ui->centralwidget);
+    screen_divider->setFixedHeight(8);
+    screen_divider->setCursor(Qt::SizeVerCursor);
+    screen_divider->setStyleSheet(QStringLiteral(
+        "background-color: rgba(10, 132, 255, 0);")); // invisible until hovered, see eventFilter
+    screen_divider->hide();
+    screen_divider->raise();
+    screen_divider->installEventFilter(this);
 
     auto* escape_shortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
     escape_shortcut->setContext(Qt::ApplicationShortcut);
@@ -1677,6 +1709,10 @@ void GMainWindow::BootGame(const QString& filename) {
         ShowFullscreen();
     }
 
+    RepositionHomeButton();
+    home_button->show();
+    home_button->raise();
+
     OnResumeGame(true);
 }
 
@@ -1770,6 +1806,8 @@ void GMainWindow::ShutdownGame() {
     UpdateSaveStates();
 
     emulation_running = false;
+    home_button->hide();
+    screen_divider->hide();
 
     game_title.clear();
     UpdateWindowTitle();
@@ -3057,6 +3095,12 @@ void GMainWindow::OnLoadState() {
 }
 
 void GMainWindow::OnEscapePressed() {
+    if (settings_overlay) {
+        if (auto* dialog = settings_overlay->findChild<ConfigureDialog*>()) {
+            dialog->reject();
+        }
+        return;
+    }
     if (!emulation_running) {
         close();
         return;
@@ -3070,14 +3114,284 @@ void GMainWindow::OnEscapePressed() {
     }
 }
 
+void GMainWindow::OnHomeButtonClicked() {
+    if (!emulation_running) {
+        return;
+    }
+    const auto result =
+        QMessageBox::question(this, tr("Quit Session"),
+                              tr("Do you want to quit the current session?"),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (result == QMessageBox::Yes) {
+        ui->action_Stop->trigger();
+    }
+}
+
 void GMainWindow::OnConfigure() {
+    ShowConfigureOverlay(0, !multiplayer_state->IsHostingPublicRoom());
+}
+
+void GMainWindow::OnQuickSettings() {
+    ShowConfigureOverlay(5, !multiplayer_state->IsHostingPublicRoom()); // Graphics tab
+}
+
+// Settings used to be a separate modal QDialog (QDialog::exec()). To make it feel like part of
+// the main window instead of a floating OS window, the dialog is reparented into a plain
+// embedded widget (Qt::Widget flag, no title bar) placed inside a centered card over a dimmed
+// backdrop. Since exec()'s blocking event loop no longer applies, the former synchronous
+// "apply after exec() returns" flow becomes two lambdas hung off the dialog's own
+// accepted()/rejected() signals (still emitted normally by its OK/Cancel buttons).
+void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) {
+    if (settings_overlay) {
+        settings_overlay->raise();
+        return;
+    }
+
     game_list->SetDirectoryWatcherEnabled(false);
     Settings::SetConfiguringGlobal(true);
-    ConfigureDialog configureDialog(this, hotkey_registry, system, gl_renderer, physical_devices,
-                                    !multiplayer_state->IsHostingPublicRoom());
-    connect(&configureDialog, &ConfigureDialog::LanguageChanged, this,
-            &GMainWindow::OnLanguageChanged);
-    auto old_theme = UISettings::values.theme;
+
+    auto* dialog = new ConfigureDialog(nullptr, hotkey_registry, system, gl_renderer,
+                                       physical_devices, enable_web_config);
+    dialog->setWindowFlags(Qt::Widget);
+    dialog->SetActiveTab(initial_tab);
+    // Restyles the stock native Settings dialog to match the home screen's dark, rounded,
+    // pill-accented look instead of the default system chrome.
+    // Fully custom White/Dark theming (no native palette): pick the color set from the current
+    // theme, then build the whole settings-panel stylesheet from it. White = white surfaces,
+    // black text/accents; otherwise the dark set.
+    const bool white = UISettings::values.theme == QStringLiteral("white");
+    const QString bg = white ? QStringLiteral("#ffffff") : QStringLiteral("#18181c");
+    const QString text = white ? QStringLiteral("#000000") : QStringLiteral("#e8e8ec");
+    const QString listtext = white ? QStringLiteral("#222222") : QStringLiteral("#c8c8ce");
+    const QString selbg = white ? QStringLiteral("#000000") : QStringLiteral("#2f2f37");
+    const QString seltext = white ? QStringLiteral("#ffffff") : QStringLiteral("#ffffff");
+    const QString hover = white ? QStringLiteral("#ebebeb") : QStringLiteral("#26262c");
+    const QString btn = white ? QStringLiteral("#ededed") : QStringLiteral("#2a2a30");
+    const QString btnhover = white ? QStringLiteral("#e0e0e0") : QStringLiteral("#34343c");
+    const QString btnpress = white ? QStringLiteral("#d5d5d5") : QStringLiteral("#222228");
+    const QString accent = white ? QStringLiteral("#000000") : QStringLiteral("#0a84ff");
+    const QString accenth = white ? QStringLiteral("#333333") : QStringLiteral("#2f95ff");
+    const QString field = white ? QStringLiteral("#f2f2f2") : QStringLiteral("#1c1c20");
+    const QString border = white ? QStringLiteral("#cccccc") : QStringLiteral("#2c2c32");
+    const QString groove = white ? QStringLiteral("#d5d5d5") : QStringLiteral("#2c2c32");
+    const QString handle = white ? QStringLiteral("#000000") : QStringLiteral("#ffffff");
+    const QString focus = white ? QStringLiteral("#000000") : QStringLiteral("#4dd9e8");
+
+    QString qss;
+    // Pin the font family here too: Qt resets it to the system default whenever any other font
+    // property (e.g. font-weight below) is set via QSS.
+    qss += QStringLiteral("* { font-family: 'Nintendo Switch UI'; }");
+    qss += QStringLiteral("QDialog, QWidget#configureDialog { background-color: %1; }").arg(bg);
+    qss += QStringLiteral("QGroupBox { background: transparent; border: none; font-weight: 600;"
+                          " color: %1; margin-top: 20px; }")
+               .arg(text);
+    qss += QStringLiteral("QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top"
+                          " left; left: 0px; top: 0px; color: %1; padding-left: 0px; }")
+               .arg(text);
+    qss += QStringLiteral("QTabWidget::pane { border: none; background: transparent; }");
+    // The per-tab pages and their scroll-area wrappers are plain QWidgets, so without an
+    // explicit rule they inherit the active theme's app-wide stylesheet background instead of
+    // this panel's — rendering the content area as a lighter slab beside the sidebar.
+    qss += QStringLiteral("QScrollArea, QScrollArea > QWidget > QWidget, QTabWidget > QWidget {"
+                          " background-color: %1; }")
+               .arg(bg);
+    qss += QStringLiteral("QListWidget { background-color: transparent; border: none; color: %1;"
+                          " padding: 6px; outline: none; }")
+               .arg(listtext);
+    qss += QStringLiteral("QListWidget::item { padding: 9px 12px; border-radius: 12px;"
+                          " margin: 2px 4px; }");
+    qss += QStringLiteral("QListWidget::item:selected { background-color: %1; color: %2; }")
+               .arg(selbg, seltext);
+    qss += QStringLiteral("QListWidget::item:hover:!selected { background-color: %1; }").arg(hover);
+    qss += QStringLiteral("QPushButton { background-color: %1; color: %2; border: none;"
+                          " border-radius: 10px; padding: 7px 18px; font-weight: 600; }")
+               .arg(btn, text);
+    qss += QStringLiteral("QPushButton:hover { background-color: %1; }").arg(btnhover);
+    qss += QStringLiteral("QPushButton:pressed { background-color: %1; }").arg(btnpress);
+    qss += QStringLiteral("QPushButton:default { background-color: %1; color: %2; }")
+               .arg(accent, seltext);
+    qss += QStringLiteral("QPushButton:default:hover { background-color: %1; }").arg(accenth);
+    qss += QStringLiteral("QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {"
+                          " background-color: %1; color: %2; border: 1px solid %3;"
+                          " border-radius: 10px; padding: 4px 6px; min-height: 20px; }")
+               .arg(field, text, border);
+    qss += QStringLiteral("QComboBox::drop-down { border: none; }");
+    qss += QStringLiteral("QSlider::groove:horizontal { height: 4px; background: %1;"
+                          " border-radius: 2px; }")
+               .arg(groove);
+    qss += QStringLiteral("QSlider::sub-page:horizontal { background: %1; border-radius: 2px; }")
+               .arg(accent);
+    qss += QStringLiteral("QSlider::handle:horizontal { background: %1; width: 16px; height: 16px;"
+                          " margin: -6px 0; border-radius: 8px; }")
+               .arg(handle);
+    // Scrollbars hidden (0px) but scrolling still works via wheel/trackpad.
+    qss += QStringLiteral("QScrollBar:vertical, QScrollBar:horizontal { width: 0px; height: 0px;"
+                          " background: transparent; }");
+    qss += QStringLiteral("QScrollBar::handle { background: transparent; }");
+    qss += QStringLiteral("QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }");
+    qss += QStringLiteral("QLabel { color: %1; }").arg(text);
+    qss += QStringLiteral("QCheckBox:focus, QRadioButton:focus, QComboBox:focus, QLineEdit:focus,"
+                          " QSpinBox:focus, QDoubleSpinBox:focus, QSlider:focus, QPushButton:focus {"
+                          " border: 1px solid %1; border-radius: 6px; }")
+               .arg(focus);
+    // Switch-style Back/OK: flat, no chrome — just the circular glyph (set in code below) + text.
+    qss += QStringLiteral("QDialogButtonBox QPushButton { background: transparent; border: none;"
+                          " border-radius: 6px; color: %1; padding: 4px 10px; font-weight: 600; }")
+               .arg(text);
+    qss += QStringLiteral("QDialogButtonBox QPushButton:focus { border: none; }");
+    qss += QStringLiteral("QDialogButtonBox QPushButton:default { background: transparent;"
+                          " color: %1; }")
+               .arg(text);
+    qss += QStringLiteral("QDialogButtonBox QPushButton:default:hover { background-color: %1; }")
+               .arg(hover);
+    qss += QStringLiteral("QDialogButtonBox QPushButton:hover { background-color: %1; }").arg(hover);
+    qss += QStringLiteral("QDialogButtonBox { border: none; padding-top: 10px; }");
+    dialog->setStyleSheet(qss);
+
+    // The .ui files each carry their own group-box margins, so section titles and the rows
+    // underneath them start at different x positions from page to page — a visibly ragged left
+    // edge. Zeroing the horizontal margins on every group's layout puts each row's leading edge
+    // (label text, or a checkbox's indicator) on the same line as its section title.
+    for (QGroupBox* group : dialog->findChildren<QGroupBox*>()) {
+        if (QLayout* group_layout = group->layout()) {
+            const QMargins margins = group_layout->contentsMargins();
+            group_layout->setContentsMargins(0, margins.top(), 0, margins.bottom());
+        }
+    }
+
+    // Switch-style button prompts: a small colored circular glyph (B/A) before the label,
+    // replacing the generic rectangular Cancel/OK buttons.
+    auto make_switch_badge = [](const QString& letter, const QColor& color) {
+        constexpr int BadgeSize = 22;
+        QPixmap pixmap(BadgeSize, BadgeSize);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        painter.drawEllipse(0, 0, BadgeSize, BadgeSize);
+        QFont font = painter.font();
+        font.setBold(true);
+        font.setPointSize(11);
+        painter.setFont(font);
+        painter.setPen(Qt::white);
+        painter.drawText(QRect(0, 0, BadgeSize, BadgeSize), Qt::AlignCenter, letter);
+        return QIcon(pixmap);
+    };
+    if (auto* button_box = dialog->findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"))) {
+        if (auto* cancel_button = button_box->button(QDialogButtonBox::Cancel)) {
+            cancel_button->setText(tr("Back"));
+            cancel_button->setIcon(make_switch_badge(QStringLiteral("B"), QColor(0xe0, 0x3c, 0x3c)));
+            cancel_button->setIconSize(QSize(22, 22));
+        }
+        if (auto* ok_button = button_box->button(QDialogButtonBox::Ok)) {
+            ok_button->setIcon(make_switch_badge(QStringLiteral("A"), QColor(0x3c, 0x8c, 0xe0)));
+            ok_button->setIconSize(QSize(22, 22));
+        }
+    }
+
+    // Only the per-tab content should ever scroll — the sidebar, the General/Network/Debug/UI
+    // tab row, and the Reset/Back/OK row at the bottom must all stay fixed in place. So each
+    // tab PAGE gets wrapped in its own scroll area (not the dialog as a whole): the sidebar and
+    // button row are siblings of tabWidget in the dialog's own layout and are never touched,
+    // and the tab bar is tabWidget's own native chrome, which this doesn't wrap either — only
+    // the content below it (the page widget) does.
+    //
+    // The sidebar swaps tabWidget's pages via clear()+addTab() every time the category changes
+    // (see ConfigureDialog::UpdateVisibleTabs), which re-adds the RAW page widgets and would
+    // undo any wrapping — so this has to re-wrap on every category change too, not just once.
+    if (auto* tab_widget = dialog->findChild<QTabWidget*>(QStringLiteral("tabWidget"))) {
+        // documentMode removes the tab widget's pane frame — the lighter bordered box that made
+        // the content area look like a separate panel from the sidebar.
+        tab_widget->setDocumentMode(true);
+        auto wrap_and_relayout = [tab_widget] {
+            const int old_current = tab_widget->currentIndex();
+            for (int i = 0; i < tab_widget->count(); ++i) {
+                QWidget* page = tab_widget->widget(i);
+                if (!page || qobject_cast<QScrollArea*>(page)) {
+                    continue; // already wrapped, or nothing to wrap
+                }
+                const QString title = tab_widget->tabText(i);
+                tab_widget->removeTab(i);
+                auto* scroll = new QScrollArea(tab_widget);
+                scroll->setWidgetResizable(true);
+                scroll->setFrameShape(QFrame::NoFrame);
+                // AsNeeded, not AlwaysOff: with widgetResizable(true), forcing the horizontal
+                // bar off makes the scroll area pin its widget to the viewport width, but any
+                // child whose minimum width exceeds the viewport (e.g. the Debug tab) forces it
+                // back wider — an infinite resize war that overflows the stack and crashes.
+                // AsNeeded lets the width settle instead of oscillating.
+                scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+                scroll->setStyleSheet(QStringLiteral(
+                    "QScrollArea { background: transparent; border: none; }"
+                    // Hidden scrollbars (0px) — wheel/trackpad scrolling still works.
+                    "QScrollBar:vertical, QScrollBar:horizontal { width: 0px; height: 0px;"
+                    " background: transparent; margin: 0; }"
+                    "QScrollBar::handle { background: transparent; }"
+                    "QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }"
+                    "QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }"));
+                scroll->setWidget(page);
+                tab_widget->insertTab(i, scroll, title);
+                if (page->layout()) {
+                    page->layout()->invalidate();
+                    page->layout()->activate();
+                }
+            }
+            tab_widget->setCurrentIndex(qMax(0, old_current));
+        };
+        wrap_and_relayout();
+        connect(tab_widget, &QTabWidget::currentChanged, dialog,
+               [wrap_and_relayout](int) { wrap_and_relayout(); });
+        if (auto* selector_list = dialog->findChild<QListWidget*>(QStringLiteral("selectorList"))) {
+            selector_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            connect(selector_list, &QListWidget::itemSelectionChanged, dialog, wrap_and_relayout);
+        }
+    }
+    connect(dialog, &ConfigureDialog::LanguageChanged, this, &GMainWindow::OnLanguageChanged);
+
+    settings_overlay = new QWidget(ui->centralwidget);
+    settings_overlay->setObjectName(QStringLiteral("settingsOverlayBackdrop"));
+    settings_overlay->setStyleSheet(
+        QStringLiteral("#settingsOverlayBackdrop { background-color: rgba(0, 0, 0, 150); }"));
+    settings_overlay->setAttribute(Qt::WA_StyledBackground, true);
+    settings_overlay->installEventFilter(this);
+
+    settings_card = new QWidget(settings_overlay);
+    settings_card->setObjectName(QStringLiteral("settingsOverlayCard"));
+    settings_card->setStyleSheet(
+        QStringLiteral("#settingsOverlayCard { background-color: %1; border: 1px solid %2;"
+                       " border-radius: 20px; }")
+            .arg(bg, border));
+    settings_card->setAttribute(Qt::WA_StyledBackground, true);
+    auto* card_layout = new QVBoxLayout(settings_card);
+    card_layout->setContentsMargins(1, 1, 1, 1);
+    // Scrolling now happens per-tab-page (see wrap_and_relayout above), not on the dialog as a
+    // whole, so the sidebar/tab-bar/button-row stay fixed — only each tab's own content area
+    // scrolls when it's taller than the card.
+    card_layout->addWidget(dialog);
+
+    RepositionSettingsOverlay();
+    settings_overlay->show();
+    settings_overlay->raise();
+    dialog->setFocus();
+
+    // Entrance animation: the card rises and expands into place so the panel reads as opening
+    // rather than popping in. It animates to whatever geometry RepositionSettingsOverlay just
+    // computed, so it lands exactly where the static layout would have put it.
+    {
+        const QRect target = settings_card->geometry();
+        QRect from = target;
+        from.setSize(target.size() * 0.96);
+        from.moveCenter(target.center() + QPoint(0, 14));
+        auto* rise = new QPropertyAnimation(settings_card, "geometry", settings_card);
+        rise->setDuration(190);
+        rise->setStartValue(from);
+        rise->setEndValue(target);
+        rise->setEasingCurve(QEasingCurve::OutCubic);
+        rise->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+
+    const auto old_theme = UISettings::values.theme;
     const int old_input_profile_index = Settings::values.current_input_profile_index;
     const auto old_input_profiles = Settings::values.input_profiles;
     const auto old_touch_from_button_maps = Settings::values.touch_from_button_maps;
@@ -3087,84 +3401,175 @@ void GMainWindow::OnConfigure() {
 #ifdef __unix__
     const bool old_gamemode = Settings::values.enable_gamemode.GetValue();
 #endif
-    auto result = configureDialog.exec();
-    game_list->SetDirectoryWatcherEnabled(true);
-    if (result == QDialog::Accepted) {
-        configureDialog.ApplyConfiguration();
-        InitializeHotkeys();
-        if (UISettings::values.theme != old_theme) {
-            UpdateUITheme();
-        }
+
+    connect(dialog, &QDialog::accepted, this,
+           [this, dialog, old_theme
 #ifdef ENABLE_DISCORD_RPC
-        if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence) {
-            SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
-            discord_rpc->Update(system.IsPoweredOn());
-        }
+            , old_discord_presence
 #endif
 #ifdef __unix__
-        if (Settings::values.enable_gamemode.GetValue() != old_gamemode) {
-            SetGamemodeEnabled(Settings::values.enable_gamemode.GetValue());
-        }
+            , old_gamemode
 #endif
-        if (!multiplayer_state->IsHostingPublicRoom())
-            multiplayer_state->UpdateCredentials();
-        emit UpdateThemedIcons();
-        SyncMenuUISettings();
-        game_list->RefreshGameDirectory();
-        config->Save();
-        if (UISettings::values.hide_mouse && emulation_running) {
-            setMouseTracking(true);
-            mouse_hide_timer.start();
-        } else {
-            setMouseTracking(false);
-        }
-        ReloadTurbo();
-        UpdateSecondaryWindowVisibility();
-        UpdateBootHomeMenuState();
-        UpdateStatusButtons();
-    } else {
-        Settings::values.input_profiles = old_input_profiles;
-        Settings::values.touch_from_button_maps = old_touch_from_button_maps;
-        Settings::LoadProfile(old_input_profile_index);
-    }
+           ] {
+                dialog->ApplyConfiguration();
+                InitializeHotkeys();
+                if (UISettings::values.theme != old_theme) {
+                    UpdateUITheme();
+                }
+#ifdef ENABLE_DISCORD_RPC
+                if (UISettings::values.enable_discord_presence.GetValue() !=
+                    old_discord_presence) {
+                    SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
+                    discord_rpc->Update(system.IsPoweredOn());
+                }
+#endif
+#ifdef __unix__
+                if (Settings::values.enable_gamemode.GetValue() != old_gamemode) {
+                    SetGamemodeEnabled(Settings::values.enable_gamemode.GetValue());
+                }
+#endif
+                if (!multiplayer_state->IsHostingPublicRoom())
+                    multiplayer_state->UpdateCredentials();
+                emit UpdateThemedIcons();
+                SyncMenuUISettings();
+                game_list->RefreshGameDirectory();
+                config->Save();
+                if (UISettings::values.hide_mouse && emulation_running) {
+                    setMouseTracking(true);
+                    mouse_hide_timer.start();
+                } else {
+                    setMouseTracking(false);
+                }
+                ReloadTurbo();
+                UpdateSecondaryWindowVisibility();
+                UpdateBootHomeMenuState();
+                UpdateStatusButtons();
+                home_screen->ApplyAppearanceSettings();
+
+                game_list->SetDirectoryWatcherEnabled(true);
+                settings_overlay->deleteLater();
+                settings_overlay = nullptr;
+                settings_card = nullptr;
+            });
+
+    connect(dialog, &QDialog::rejected, this,
+           [this, old_input_profile_index, old_input_profiles, old_touch_from_button_maps] {
+               Settings::values.input_profiles = old_input_profiles;
+               Settings::values.touch_from_button_maps = old_touch_from_button_maps;
+               Settings::LoadProfile(old_input_profile_index);
+
+               game_list->SetDirectoryWatcherEnabled(true);
+               settings_overlay->deleteLater();
+               settings_overlay = nullptr;
+               settings_card = nullptr;
+           });
 }
 
-void GMainWindow::OnQuickSettings() {
-    game_list->SetDirectoryWatcherEnabled(false);
-    Settings::SetConfiguringGlobal(true);
-    ConfigureDialog configureDialog(this, hotkey_registry, system, gl_renderer, physical_devices,
-                                    !multiplayer_state->IsHostingPublicRoom());
-    configureDialog.SetActiveTab(5); // Graphics tab: resolution, shaders, render settings
-    connect(&configureDialog, &ConfigureDialog::LanguageChanged, this,
-            &GMainWindow::OnLanguageChanged);
-    auto old_theme = UISettings::values.theme;
-    const int old_input_profile_index = Settings::values.current_input_profile_index;
-    const auto old_input_profiles = Settings::values.input_profiles;
-    const auto old_touch_from_button_maps = Settings::values.touch_from_button_maps;
-    auto result = configureDialog.exec();
-    game_list->SetDirectoryWatcherEnabled(true);
-    if (result == QDialog::Accepted) {
-        configureDialog.ApplyConfiguration();
-        InitializeHotkeys();
-        if (UISettings::values.theme != old_theme) {
-            UpdateUITheme();
-        }
-        if (!multiplayer_state->IsHostingPublicRoom())
-            multiplayer_state->UpdateCredentials();
-        emit UpdateThemedIcons();
-        SyncMenuUISettings();
-        game_list->RefreshGameDirectory();
-        config->Save();
-        ReloadTurbo();
-        UpdateSecondaryWindowVisibility();
-        UpdateBootHomeMenuState();
-        UpdateStatusButtons();
-        home_screen->ApplyAppearanceSettings();
-    } else {
-        Settings::values.input_profiles = old_input_profiles;
-        Settings::values.touch_from_button_maps = old_touch_from_button_maps;
-        Settings::LoadProfile(old_input_profile_index);
+void GMainWindow::RepositionSettingsOverlay() {
+    if (!settings_overlay || !settings_card) {
+        return;
     }
+    settings_overlay->setGeometry(ui->centralwidget->rect());
+    const QSize overlay_size = settings_overlay->size();
+    const QSize card_size(qMin(overlay_size.width() - 80, 900),
+                          qMin(overlay_size.height() - 80, 650));
+    settings_card->setGeometry((overlay_size.width() - card_size.width()) / 2,
+                               (overlay_size.height() - card_size.height()) / 2,
+                               card_size.width(), card_size.height());
+}
+
+// The in-game Home button floats directly over the running game rather than inside any themed
+// container, so it can't inherit the palette and has to be recoloured explicitly whenever the
+// theme changes — otherwise the dark-theme chrome stays on screen under the White theme.
+void GMainWindow::ApplyOverlayButtonTheme() {
+    if (!home_button) {
+        return;
+    }
+    const bool white = UISettings::values.theme == QStringLiteral("white");
+    const QColor foreground = white ? QColor(Qt::black) : QColor(Qt::white);
+
+    // The letterbox around the 3DS screens is painted by the renderer (its clear colour), not by
+    // Qt, so the theme has to drive it explicitly or the game stays framed in black under the
+    // White theme. Note this overrides the Background Color setting on the Graphics page.
+    const float bg = white ? 1.0f : 0.0f;
+    Settings::values.bg_red = bg;
+    Settings::values.bg_green = bg;
+    Settings::values.bg_blue = bg;
+
+#ifdef Q_OS_MAC
+    const QString home_icon_path =
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/home_icons/home.png");
+#else
+    const QString home_icon_path =
+        QCoreApplication::applicationDirPath() + QStringLiteral("/home_icons/home.png");
+#endif
+    // home.png ships as a white glyph; recolour it by keeping its alpha and replacing the RGB,
+    // so the same asset serves both themes without needing a second file.
+    QPixmap home_icon(home_icon_path);
+    if (!home_icon.isNull()) {
+        QPainter tint(&home_icon);
+        tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        tint.fillRect(home_icon.rect(), foreground);
+        tint.end();
+    }
+    home_button->setIcon(QIcon(home_icon));
+
+    // A solid disc rather than a bare glyph: this button sits on top of arbitrary game output,
+    // whose brightness has nothing to do with the chosen theme, so a themed glyph alone can end
+    // up invisible (a black icon on a dark title screen). The disc guarantees contrast.
+    home_button->setStyleSheet(
+        QStringLiteral("QToolButton { background-color: %1; border: 1px solid %2;"
+                       " border-radius: 24px; }"
+                       "QToolButton:hover { background-color: %3; }")
+            .arg(white ? QStringLiteral("rgba(255, 255, 255, 230)")
+                       : QStringLiteral("rgba(30, 30, 34, 210)"),
+                 white ? QStringLiteral("#cccccc") : QStringLiteral("#2c2c32"),
+                 white ? QStringLiteral("#e6e6e6") : QStringLiteral("#3a3a42")));
+}
+
+void GMainWindow::RepositionHomeButton() {
+    if (!home_button) {
+        return;
+    }
+    constexpr int Margin = 16;
+    const QRect area = ui->centralwidget->rect();
+    home_button->move(area.left() + Margin,
+                      area.bottom() - home_button->height() - Margin);
+}
+
+
+void GMainWindow::RepositionScreenDivider() {
+    if (!screen_divider || !render_window || !emulation_running) {
+        return;
+    }
+    const auto& layout = render_window->GetFramebufferLayout();
+    const qreal dpr = render_window->devicePixelRatioF();
+    // FramebufferLayout coordinates are physical pixels; convert to this widget's logical ones.
+    const int seam_y = qRound(layout.bottom_screen.top / dpr);
+    const QPoint origin = render_window->mapTo(ui->centralwidget, QPoint(0, 0));
+    screen_divider->setFixedWidth(render_window->width());
+    screen_divider->move(origin.x(), origin.y() + seam_y - screen_divider->height() / 2);
+}
+
+void GMainWindow::UpdateScreenSplitFromRatio(double ratio) {
+    if (!render_window) {
+        return;
+    }
+    ratio = std::clamp(ratio, 0.15, 0.85);
+    const qreal dpr = render_window->devicePixelRatioF();
+    const auto width = static_cast<u32>(render_window->width() * dpr);
+    const auto height = static_cast<u32>(render_window->height() * dpr);
+    const auto top_height = static_cast<u16>(qRound(height * ratio));
+    Settings::values.layout_option = Settings::LayoutOption::CustomLayout;
+    Settings::values.custom_top_x = 0;
+    Settings::values.custom_top_y = 0;
+    Settings::values.custom_top_width = static_cast<u16>(width);
+    Settings::values.custom_top_height = top_height;
+    Settings::values.custom_bottom_x = 0;
+    Settings::values.custom_bottom_y = top_height;
+    Settings::values.custom_bottom_width = static_cast<u16>(width);
+    Settings::values.custom_bottom_height = static_cast<u16>(height - top_height);
+    render_window->OnFramebufferSizeChanged();
 }
 
 void GMainWindow::OnLoadAmiibo() {
@@ -4047,6 +4452,69 @@ void GMainWindow::showEvent([[maybe_unused]] QShowEvent* event) {
     game_list->PopulateAsync(UISettings::values.game_dirs);
 }
 
+void GMainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    RepositionSettingsOverlay();
+    RepositionHomeButton();
+    if (custom_screen_split_ratio >= 0.0) {
+        // custom_top/bottom_* are absolute pixel positions, not scaled to the window — once
+        // the user has dragged the divider at least once, the chosen ratio has to be
+        // reapplied at the new window size on every resize, or the screens would stay pinned
+        // to their old pixel sizes instead of filling the new window.
+        UpdateScreenSplitFromRatio(custom_screen_split_ratio);
+    }
+    RepositionScreenDivider();
+}
+
+bool GMainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == settings_overlay && event->type() == QEvent::MouseButtonPress) {
+        auto* mouse_event = static_cast<QMouseEvent*>(event);
+        if (settings_card && !settings_card->geometry().contains(mouse_event->pos())) {
+            // Clicked the dimmed backdrop, not the card itself: treat like Cancel.
+            if (auto* dialog = settings_overlay->findChild<ConfigureDialog*>()) {
+                dialog->reject();
+            }
+        }
+        return true;
+    }
+    if (watched == screen_divider) {
+        switch (event->type()) {
+        case QEvent::Enter:
+            screen_divider->setStyleSheet(
+                QStringLiteral("background-color: rgba(10, 132, 255, 180);"));
+            break;
+        case QEvent::Leave:
+            if (!dragging_screen_divider) {
+                screen_divider->setStyleSheet(QStringLiteral("background-color: rgba(10, 132, 255, 0);"));
+            }
+            break;
+        case QEvent::MouseButtonPress:
+            dragging_screen_divider = true;
+            break;
+        case QEvent::MouseButtonRelease:
+            dragging_screen_divider = false;
+            screen_divider->setStyleSheet(QStringLiteral("background-color: rgba(10, 132, 255, 0);"));
+            break;
+        case QEvent::MouseMove:
+            if (dragging_screen_divider) {
+                auto* mouse_event = static_cast<QMouseEvent*>(event);
+                const QPoint global_pos = screen_divider->mapToGlobal(mouse_event->pos());
+                const QPoint local_to_render = render_window->mapFromGlobal(global_pos);
+                const double ratio = static_cast<double>(local_to_render.y()) /
+                                     std::max(1, render_window->height());
+                custom_screen_split_ratio = std::clamp(ratio, 0.15, 0.85);
+                UpdateScreenSplitFromRatio(custom_screen_split_ratio);
+                RepositionScreenDivider();
+            }
+            break;
+        default:
+            break;
+        }
+        return false;
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
 bool GMainWindow::ShowExceptionDialog(Core::System::ResultStatus result,
                                       const std::string& details) {
     QDialog dialog(this);
@@ -4333,8 +4801,69 @@ inline bool isDarkMode() {
 #endif
 }
 
+// Fully custom app palette (Fusion, no native colors). White theme = white surfaces + black
+// text/accents; every other theme shares the dark set.
+static QPalette BuildAppPalette(bool white) {
+    QPalette p;
+    if (white) {
+        p.setColor(QPalette::Window, QColor(0xff, 0xff, 0xff));
+        p.setColor(QPalette::WindowText, QColor(0, 0, 0));
+        p.setColor(QPalette::Base, QColor(0xff, 0xff, 0xff));
+        p.setColor(QPalette::AlternateBase, QColor(0xf0, 0xf0, 0xf0));
+        p.setColor(QPalette::ToolTipBase, QColor(0xff, 0xff, 0xff));
+        p.setColor(QPalette::ToolTipText, QColor(0, 0, 0));
+        p.setColor(QPalette::Text, QColor(0, 0, 0));
+        p.setColor(QPalette::Button, QColor(0xed, 0xed, 0xed));
+        p.setColor(QPalette::ButtonText, QColor(0, 0, 0));
+        p.setColor(QPalette::BrightText, QColor(0xff, 0, 0));
+        p.setColor(QPalette::Link, QColor(0, 0, 0));
+        p.setColor(QPalette::Highlight, QColor(0, 0, 0));
+        p.setColor(QPalette::HighlightedText, QColor(0xff, 0xff, 0xff));
+        p.setColor(QPalette::PlaceholderText, QColor(0x77, 0x77, 0x77));
+        p.setColor(QPalette::Disabled, QPalette::Text, QColor(0xa0, 0xa0, 0xa0));
+        p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0xa0, 0xa0, 0xa0));
+        p.setColor(QPalette::Disabled, QPalette::WindowText, QColor(0xa0, 0xa0, 0xa0));
+    } else {
+        p.setColor(QPalette::Window, QColor(0x18, 0x18, 0x1c));
+        p.setColor(QPalette::WindowText, Qt::white);
+        p.setColor(QPalette::Base, QColor(0x1c, 0x1c, 0x20));
+        p.setColor(QPalette::AlternateBase, QColor(0x24, 0x24, 0x2a));
+        p.setColor(QPalette::ToolTipBase, QColor(0x24, 0x24, 0x2a));
+        p.setColor(QPalette::ToolTipText, Qt::white);
+        p.setColor(QPalette::Text, Qt::white);
+        p.setColor(QPalette::Button, QColor(0x2a, 0x2a, 0x30));
+        p.setColor(QPalette::ButtonText, Qt::white);
+        p.setColor(QPalette::BrightText, Qt::red);
+        p.setColor(QPalette::Link, QColor(0x0a, 0x84, 0xff));
+        p.setColor(QPalette::Highlight, QColor(0x0a, 0x84, 0xff));
+        p.setColor(QPalette::HighlightedText, Qt::white);
+        p.setColor(QPalette::PlaceholderText, QColor(0x9a, 0x9a, 0xa0));
+        p.setColor(QPalette::Disabled, QPalette::Text, QColor(0x6a, 0x6a, 0x70));
+        p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0x6a, 0x6a, 0x70));
+        p.setColor(QPalette::Disabled, QPalette::WindowText, QColor(0x6a, 0x6a, 0x70));
+    }
+    return p;
+}
+
 void GMainWindow::UpdateUITheme() {
     const QString icons_base_path = QStringLiteral(":/icons/");
+    // Custom White theme: apply the light palette and skip all the dark theme QSS files — the
+    // palette + the panel/home stylesheets (which read the same White flag) carry the look.
+    if (UISettings::values.theme == QStringLiteral("white")) {
+        QApplication::setPalette(BuildAppPalette(true));
+        qApp->setStyleSheet({});
+        setStyleSheet({});
+        QStringList white_paths(default_theme_paths);
+        white_paths.append(icons_base_path + QStringLiteral("default"));
+        QIcon::setThemeName(QStringLiteral("default"));
+        QIcon::setThemeSearchPaths(white_paths);
+        if (home_screen) {
+            home_screen->ApplyAppearanceSettings();
+        }
+        ApplyOverlayButtonTheme();
+        return;
+    }
+    QApplication::setPalette(BuildAppPalette(false));
     QString default_theme;
     if (!isDarkMode()) {
         default_theme = QStringLiteral("default");
@@ -4352,9 +4881,11 @@ void GMainWindow::UpdateUITheme() {
         const QString theme_uri(QStringLiteral(":default/style.qss"));
         QFile f(theme_uri);
         if (f.open(QFile::ReadOnly | QFile::Text)) {
-            QTextStream ts(&f);
-            qApp->setStyleSheet(ts.readAll());
-            setStyleSheet(ts.readAll());
+            // Read once into a string: calling readAll() twice leaves the stream at EOF, so the
+            // second call returns "" and silently clears the main window's stylesheet.
+            const QString stylesheet = QTextStream(&f).readAll();
+            qApp->setStyleSheet(stylesheet);
+            setStyleSheet(stylesheet);
         } else {
             LOG_ERROR(Frontend,
                       "Unable to open default stylesheet, falling back to empty stylesheet");
@@ -4367,9 +4898,10 @@ void GMainWindow::UpdateUITheme() {
         const QString theme_uri(QLatin1Char{':'} + current_theme + QStringLiteral("/style.qss"));
         QFile f(theme_uri);
         if (f.open(QFile::ReadOnly | QFile::Text)) {
-            QTextStream ts(&f);
-            qApp->setStyleSheet(ts.readAll());
-            setStyleSheet(ts.readAll());
+            // Single read — see the note in the default-theme branch above.
+            const QString stylesheet = QTextStream(&f).readAll();
+            qApp->setStyleSheet(stylesheet);
+            setStyleSheet(stylesheet);
         } else {
             LOG_ERROR(Frontend, "Unable to set style, stylesheet file not found");
         }
@@ -4380,6 +4912,10 @@ void GMainWindow::UpdateUITheme() {
     }
 
     QIcon::setThemeSearchPaths(theme_paths);
+    if (home_screen) {
+        home_screen->ApplyAppearanceSettings();
+    }
+    ApplyOverlayButtonTheme();
 }
 
 void GMainWindow::LoadTranslation() {
@@ -4770,6 +5306,36 @@ int LaunchQtFrontend(int argc, char* argv[]) {
 #endif
 
     QApplication app(argc, argv);
+
+    // App-wide custom font: Nintendo Switch UI. Loaded as a loose file from the bundle's
+    // Resources (copied there at bundle time), then set as the default QApplication font so
+    // every widget inherits it.
+    {
+#ifdef Q_OS_MAC
+        const QString font_path = QCoreApplication::applicationDirPath() +
+                                  QStringLiteral("/../Resources/NINTENDOSWITCHUI.TTF");
+#else
+        const QString font_path =
+            QCoreApplication::applicationDirPath() + QStringLiteral("/NINTENDOSWITCHUI.TTF");
+#endif
+        const int font_id = QFontDatabase::addApplicationFont(font_path);
+        if (font_id != -1) {
+            const QStringList families = QFontDatabase::applicationFontFamilies(font_id);
+            if (!families.isEmpty()) {
+                QFont app_font(families.front());
+                app.setFont(app_font);
+            }
+        }
+    }
+
+    // Hard-stop the OS from enforcing its own appearance on menus, dialogs and in-game chrome:
+    // Fusion is a Qt-drawn (non-native) style, so macOS can't impose native widgets, and a
+    // fixed palette means system Light/Dark mode no longer flips the app's colors. Everything
+    // is now driven by the app's own palette + theme QSS, consistently, regardless of macOS.
+    QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+    // Startup fallback palette (dark); GMainWindow::UpdateUITheme re-applies the correct one for
+    // the saved theme (incl. the custom White theme) once config is loaded.
+    QApplication::setPalette(BuildAppPalette(false));
 
     // Required when using .qrc resources from within a static library.
     // See https://doc.qt.io/qt-5/resources.html#using-resources-in-a-library

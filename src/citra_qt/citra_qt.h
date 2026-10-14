@@ -271,6 +271,14 @@ private slots:
     void OnConfigure();
     void OnEscapePressed();
     void OnQuickSettings();
+    void ShowConfigureOverlay(int initial_tab, bool enable_web_config);
+    void RepositionSettingsOverlay();
+    void RepositionHomeButton();
+    /// Recolours the floating in-game Home/Controller buttons for the active theme.
+    void ApplyOverlayButtonTheme();
+    void OnHomeButtonClicked();
+    void RepositionScreenDivider();
+    void UpdateScreenSplitFromRatio(double ratio);
     void OnLoadAmiibo();
     void OnRemoveAmiibo();
     void OnOpenCitraFolder();
@@ -360,7 +368,15 @@ private:
     GRenderWindow* secondary_window;
 
     GameListPlaceholder* game_list_placeholder;
-    HomeScreenWidget* home_screen;
+    HomeScreenWidget* home_screen = nullptr;
+    QWidget* settings_overlay = nullptr;
+    QWidget* settings_card = nullptr;
+    QToolButton* home_button = nullptr;
+    QWidget* screen_divider = nullptr;
+    bool dragging_screen_divider = false;
+    // -1 means "not yet customized by the user" — the divider is positioned from whatever the
+    // active (non-custom) layout option naturally computes until the first drag.
+    double custom_screen_split_ratio = -1.0;
     LoadingScreen* loading_screen;
 
     // Status bar elements
@@ -487,6 +503,8 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 };
 
 class GApplicationEventFilter : public QObject {

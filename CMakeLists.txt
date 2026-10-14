@@ -117,6 +117,11 @@ foreach(_opt IN LISTS _LIBRETRO_INCOMPATIBLE_OPTIONS)
     endif()
 endforeach()
 
+# Name of a local code-signing identity used to give the macOS app bundle a stable signature,
+# so privacy (TCC) permissions survive rebuilds. Set to "" to keep the default ad-hoc signature.
+set(MACOS_CODESIGN_IDENTITY "Azahar Local Dev" CACHE STRING
+    "macOS code-signing identity for local builds (empty = ad-hoc)")
+
 option(ENABLE_SDL2 "Enable using SDL2" ON)
 option(USE_SYSTEM_FAAD "Use the system faad2 lib (instead of the bundled one)" OFF)
 option(USE_SYSTEM_SDL2 "Use the system SDL2 lib (instead of the bundled one)" OFF)
@@ -448,7 +453,11 @@ if (APPLE)
     endif()
     find_library(AVFOUNDATION_LIBRARY AVFoundation REQUIRED)
     find_library(IOSURFACE_LIBRARY IOSurface REQUIRED)
-    set(PLATFORM_LIBRARIES ${COCOA_LIBRARY} ${AVFOUNDATION_LIBRARY} ${IOSURFACE_LIBRARY})
+    # IOKit provides the power-source API used to read the host battery level for the home
+    # screen's status readout.
+    find_library(IOKIT_LIBRARY IOKit REQUIRED)
+    set(PLATFORM_LIBRARIES ${COCOA_LIBRARY} ${AVFOUNDATION_LIBRARY} ${IOSURFACE_LIBRARY}
+                           ${IOKIT_LIBRARY})
 
     if (ENABLE_VULKAN AND NOT ENABLE_LIBRETRO)
         if (USE_SYSTEM_MOLTENVK)

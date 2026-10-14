@@ -1,0 +1,9 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/home_icons">
+    <file alias="profile.png">profile.png</file>
+    <file alias="settings.png">settings.png</file>
+    <file alias="gallery.png">gallery.png</file>
+    <file alias="adddir.png">adddir.png</file>
+    <file alias="power.png">power.png</file>
+</qresource>
+</RCC>

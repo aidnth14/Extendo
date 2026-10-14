@@ -30,7 +30,7 @@ struct Shortcut {
     ContextualShortcut shortcut;
 };
 
-using Themes = std::array<std::pair<const char*, const char*>, 6>;
+using Themes = std::array<std::pair<const char*, const char*>, 7>;
 extern const Themes themes;
 
 struct GameDir {
@@ -144,6 +144,8 @@ struct Values {
     QString home_background_path;
     QString home_font_family;
     int home_font_size = 10;
+    /// Where the home screen's dock sits: 0 = bottom (horizontal pill), 1 = left (vertical pill).
+    int home_pill_position = 0;
 
     // Shortcut name <Shortcut, context>
     std::vector<Shortcut> shortcuts;

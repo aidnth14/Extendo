@@ -57,6 +57,20 @@
           </item>
          </layout>
         </item>
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_4">
+          <item>
+           <widget class="QLabel" name="home_pill_position_label">
+            <property name="text">
+             <string>Home Dock Position</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="home_pill_position_combobox"/>
+          </item>
+         </layout>
+        </item>
        </layout>
       </item>
      </layout>

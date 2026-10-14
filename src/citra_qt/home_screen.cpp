@@ -3,6 +3,8 @@
 // Refer to the misc/licenses/gplv2.txt file included.
 
 #include <vector>
+#include <QApplication>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -17,23 +19,37 @@
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPropertyAnimation>
+#include <QScrollBar>
+#include <QWheelEvent>
 #include <QPushButton>
 #include <QSettings>
+#include <QEvent>
+#include <QMouseEvent>
 #include <QStandardItemModel>
+#include <QStyledItemDelegate>
 #include <QTextStream>
 #include <QTimer>
 #include <QToolButton>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 #include "citra_qt/game_list_p.h"
 #include "citra_qt/home_screen.h"
 #include "citra_qt/uisettings.h"
 #include "common/file_util.h"
 
+#ifdef Q_OS_MAC
+#include <IOKit/ps/IOPSKeys.h>
+#include <IOKit/ps/IOPowerSources.h>
+#endif
+
 namespace {
 
-constexpr int TileIconSize = 96;
+constexpr int DefaultTileIconSize = 96;
+constexpr int MinTileIconSize = 72;
+constexpr int MaxTileIconSize = 160;
 constexpr int TileSpacing = 12;
-constexpr int PillBarHeight = 48;
+constexpr int PillBarHeight = 61;
 
 // Cover art and backgrounds are frequently much lower-res than the area they're stretched to
 // fill; plain bilinear scaling (Qt::SmoothTransformation) leaves that soft/pixelated. This
@@ -88,22 +104,52 @@ QImage SharpenImage(const QImage& input) {
     return out;
 }
 
+// target_size is in logical (CSS) pixels; dpr is the screen's device pixel ratio (2.0 on
+// Retina). Without this, a pixmap rendered at exactly the logical tile size gets stretched by
+// Qt's compositor to fill the actual physical pixels on a HiDPI screen, which is what reads as
+// "pixelated" even when the source image is high quality.
 QPixmap ScaleAndSharpen(const QPixmap& source, const QSize& target_size,
-                        Qt::AspectRatioMode aspect_mode) {
-    const QPixmap scaled =
-        source.scaled(target_size, aspect_mode, Qt::SmoothTransformation);
+                        Qt::AspectRatioMode aspect_mode, qreal dpr = 1.0) {
+    const QSize physical_size(qRound(target_size.width() * dpr),
+                              qRound(target_size.height() * dpr));
+    QPixmap scaled = source.scaled(physical_size, aspect_mode, Qt::SmoothTransformation);
     // Sharpening a tiny (e.g. pre-scale icon-sized) source barely helps and burns cycles for
     // nothing: only worth it once the image is large enough for softness to be visible.
-    if (scaled.width() < 24 || scaled.height() < 24) {
-        return scaled;
+    if (scaled.width() >= 24 && scaled.height() >= 24) {
+        scaled = QPixmap::fromImage(SharpenImage(scaled.toImage()));
     }
-    return QPixmap::fromImage(SharpenImage(scaled.toImage()));
+    scaled.setDevicePixelRatio(dpr);
+    return scaled;
 }
 
-QPixmap RoundedPixmap(const QPixmap& source, int size, int radius) {
+// Perceptual (ITU-R BT.601) luminance of a pixmap, 0 (black) to 1 (white). Downscales to a tiny
+// size first since only the overall brightness matters here, not per-pixel detail.
+qreal AverageLuminance(const QPixmap& pixmap) {
+    if (pixmap.isNull()) {
+        return 0.0;
+    }
+    const QImage image =
+        pixmap.scaled(16, 16, Qt::IgnoreAspectRatio, Qt::FastTransformation)
+            .toImage()
+            .convertToFormat(QImage::Format_RGB32);
+    double sum = 0.0;
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        const QRgb* row = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+        for (int x = 0; x < image.width(); ++x) {
+            const QRgb px = row[x];
+            sum += 0.299 * qRed(px) + 0.587 * qGreen(px) + 0.114 * qBlue(px);
+            ++count;
+        }
+    }
+    return count > 0 ? (sum / count) / 255.0 : 0.0;
+}
+
+QPixmap RoundedPixmap(const QPixmap& source, int size, int radius, qreal dpr = 1.0) {
     QPixmap scaled =
-        ScaleAndSharpen(source, QSize(size, size), Qt::KeepAspectRatioByExpanding);
-    QPixmap rounded(size, size);
+        ScaleAndSharpen(source, QSize(size, size), Qt::KeepAspectRatioByExpanding, dpr);
+    QPixmap rounded(qRound(size * dpr), qRound(size * dpr));
+    rounded.setDevicePixelRatio(dpr);
     rounded.fill(Qt::transparent);
 
     QPainter painter(&rounded);
@@ -111,15 +157,242 @@ QPixmap RoundedPixmap(const QPixmap& source, int size, int radius) {
     QPainterPath path;
     path.addRoundedRect(0, 0, size, size, radius, radius);
     painter.setClipPath(path);
-    painter.drawPixmap((size - scaled.width()) / 2, (size - scaled.height()) / 2, scaled);
+    painter.drawPixmap(QPointF((size - scaled.width() / dpr) / 2.0,
+                               (size - scaled.height() / dpr) / 2.0),
+                       scaled);
     return rounded;
 }
 
+// Gives a QToolButton a springy hover/press response by animating its iconSize. Animating the
+// *icon* rather than the button's geometry is deliberate: the buttons live inside a layout, so
+// any geometry animation would be fought and overwritten on the next relayout, whereas iconSize
+// is purely visual and leaves the button's own footprint untouched.
+class ButtonPulse : public QObject {
+public:
+    ButtonPulse(QToolButton* button, int base, int hovered, int pressed)
+        : QObject(button), base_size(base), hover_size(hovered), press_size(pressed) {
+        animation = new QPropertyAnimation(button, "iconSize", this);
+        animation->setDuration(130);
+        animation->setEasingCurve(QEasingCurve::OutCubic);
+        button->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        auto* button = qobject_cast<QToolButton*>(watched);
+        if (!button) {
+            return QObject::eventFilter(watched, event);
+        }
+        switch (event->type()) {
+        case QEvent::Enter:
+            AnimateTo(button, hover_size);
+            break;
+        case QEvent::Leave:
+            AnimateTo(button, base_size);
+            break;
+        case QEvent::MouseButtonPress:
+            AnimateTo(button, press_size);
+            break;
+        case QEvent::MouseButtonRelease:
+            // Settle on the hover size if the cursor is still over the button, so releasing a
+            // click doesn't snap straight back down to the idle size while still hovered.
+            AnimateTo(button, button->underMouse() ? hover_size : base_size);
+            break;
+        default:
+            break;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    void AnimateTo(QToolButton* button, int size) {
+        animation->stop();
+        animation->setStartValue(button->iconSize());
+        animation->setEndValue(QSize(size, size));
+        animation->start();
+    }
+
+    QPropertyAnimation* animation;
+    int base_size;
+    int hover_size;
+    int press_size;
+};
+
+// Host battery charge as a percentage, plus whether it's on mains power. Desktops have no
+// battery at all, so they report a permanent full charge rather than an empty readout.
+struct BatteryState {
+    int percent = 100;
+    bool charging = true;
+};
+
+BatteryState ReadBatteryState() {
+    BatteryState state;
+#ifdef Q_OS_MAC
+    CFTypeRef info = IOPSCopyPowerSourcesInfo();
+    if (!info) {
+        return state;
+    }
+    CFArrayRef sources = IOPSCopyPowerSourcesList(info);
+    if (sources) {
+        for (CFIndex i = 0; i < CFArrayGetCount(sources); ++i) {
+            CFDictionaryRef source =
+                IOPSGetPowerSourceDescription(info, CFArrayGetValueAtIndex(sources, i));
+            if (!source) {
+                continue;
+            }
+            int current = 0;
+            int max = 0;
+            if (auto num = static_cast<CFNumberRef>(
+                    CFDictionaryGetValue(source, CFSTR(kIOPSCurrentCapacityKey)))) {
+                CFNumberGetValue(num, kCFNumberIntType, &current);
+            }
+            if (auto num = static_cast<CFNumberRef>(
+                    CFDictionaryGetValue(source, CFSTR(kIOPSMaxCapacityKey)))) {
+                CFNumberGetValue(num, kCFNumberIntType, &max);
+            }
+            if (max > 0) {
+                state.percent = qBound(0, qRound(100.0 * current / max), 100);
+                const auto charging = static_cast<CFBooleanRef>(
+                    CFDictionaryGetValue(source, CFSTR(kIOPSIsChargingKey)));
+                state.charging = charging && CFBooleanGetValue(charging);
+            }
+            break; // first internal battery is the one we care about
+        }
+        CFRelease(sources);
+    }
+    CFRelease(info);
+#endif
+    return state;
+}
+
+// Switch-style battery pill: rounded body, nub on the right, fill proportional to charge.
+QPixmap RenderBatteryIcon(const BatteryState& state, const QColor& color, qreal dpr) {
+    constexpr int Width = 26;
+    constexpr int Height = 13;
+    QPixmap pixmap(qRound(Width * dpr), qRound(Height * dpr));
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QRectF body(0.5, 0.5, Width - 6.0, Height - 1.0);
+    QPen outline(color);
+    outline.setWidthF(1.4);
+    painter.setPen(outline);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(body, 3, 3);
+
+    // Terminal nub on the right-hand end.
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    painter.drawRoundedRect(QRectF(body.right() + 1.5, Height / 2.0 - 2.5, 2.5, 5.0), 1, 1);
+
+    // Fill. Keep a sliver visible at very low charge so the bar never looks simply absent.
+    const qreal inset = 2.5;
+    const qreal usable = body.width() - inset * 2;
+    const qreal filled = qMax(usable * state.percent / 100.0, state.percent > 0 ? 1.5 : 0.0);
+    if (filled > 0.0) {
+        painter.setBrush(state.percent <= 15 && !state.charging ? QColor(0xe0, 0x3c, 0x3c) : color);
+        painter.drawRoundedRect(
+            QRectF(body.left() + inset, body.top() + inset, filled, body.height() - inset * 2), 1.5,
+            1.5);
+    }
+    return pixmap;
+}
+
 QToolButton* MakePillButton(const QString& glyph, const QString& tooltip, QWidget* parent) {
+    Q_UNUSED(tooltip);
     auto* button = new QToolButton(parent);
     button->setText(glyph);
-    button->setToolTip(tooltip);
-    button->setFixedSize(36, 36);
+    // Native QToolTip popups render corrupted over this window's Vulkan/MoltenVK surface, so
+    // intentionally not setting one here.
+    button->setFixedSize(51, 51);
+    button->setFocusPolicy(Qt::NoFocus);
+    button->setProperty("pillButton", true);
+    return button;
+}
+
+// Bounding box of everything that isn't fully transparent. Source icons each ship a different
+// amount of built-in padding (measured: content fills anywhere from 41% to 86% of the canvas),
+// so scaling whole canvases to one size makes the actual glyphs render at visibly different
+// sizes. Cropping to this box first is what lets them be normalized to a common visual size.
+QRect OpaqueBounds(const QImage& image) {
+    int min_x = image.width();
+    int min_y = image.height();
+    int max_x = -1;
+    int max_y = -1;
+    for (int y = 0; y < image.height(); ++y) {
+        const QRgb* row = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+        for (int x = 0; x < image.width(); ++x) {
+            if (qAlpha(row[x]) > 8) { // ignore near-invisible antialiasing fringe
+                min_x = qMin(min_x, x);
+                min_y = qMin(min_y, y);
+                max_x = qMax(max_x, x);
+                max_y = qMax(max_y, y);
+            }
+        }
+    }
+    if (max_x < 0) {
+        return QRect(); // fully transparent
+    }
+    return QRect(QPoint(min_x, min_y), QPoint(max_x, max_y));
+}
+
+QToolButton* MakeIconPillButton(const QString& icon_resource_path, const QString& tooltip,
+                                QWidget* parent) {
+    Q_UNUSED(tooltip);
+    auto* button = new QToolButton(parent);
+
+    // QToolButton + a QSS border-radius clip region doesn't reliably center QIcon's own
+    // auto-scaled pixmap when icon size < button size (observed: visibly off-center/clipped
+    // against the rounded button edge, regardless of how well-centered the source icon itself
+    // is). Removing all ambiguity by making the icon canvas exactly match the button's full
+    // size, so Qt has no separate icon-vs-button margin calculation left to get wrong.
+    constexpr int ButtonSize = 51;
+    // The icon canvas is deliberately smaller than the button. If it matched the button exactly,
+    // the style's own internal button margins would shrink the icon rect below the pixmap's
+    // size, and QStyle centres-and-clips rather than rescaling in that case — which chopped the
+    // edges off the taller icons.
+    constexpr int CanvasSize = 36;
+    constexpr int ContentSize = 26; // normalized glyph size, measured edge-to-edge of real ink
+    const qreal dpr = parent ? parent->devicePixelRatioF() : qApp->devicePixelRatio();
+    QImage source_image(icon_resource_path);
+    QPixmap canvas(qRound(CanvasSize * dpr), qRound(CanvasSize * dpr));
+    canvas.setDevicePixelRatio(dpr);
+    canvas.fill(Qt::transparent);
+    if (!source_image.isNull()) {
+        if (source_image.format() != QImage::Format_ARGB32) {
+            source_image = source_image.convertToFormat(QImage::Format_ARGB32);
+        }
+        // Crop away the icon's own padding so ContentSize applies to the glyph itself, making
+        // every button's artwork optically the same size no matter how its PNG was authored.
+        const QRect bounds = OpaqueBounds(source_image);
+        if (bounds.isValid()) {
+            source_image = source_image.copy(bounds);
+        }
+        // Fit the longest edge to ContentSize so wide and tall glyphs carry equal visual weight
+        // and neither can overflow the button's rounded clip region.
+        QImage scaled = source_image.scaled(qRound(ContentSize * dpr), qRound(ContentSize * dpr),
+                                            Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        QPixmap scaled_logical = QPixmap::fromImage(scaled);
+        scaled_logical.setDevicePixelRatio(dpr);
+        QPainter painter(&canvas);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        painter.drawPixmap(QPointF((CanvasSize - scaled_logical.width() / dpr) / 2.0,
+                                   (CanvasSize - scaled_logical.height() / dpr) / 2.0),
+                           scaled_logical);
+    }
+
+    button->setIcon(QIcon(canvas));
+    button->setIconSize(QSize(CanvasSize, CanvasSize));
+    // Grow on hover, dip on press. The canvas has ~15px of slack inside the button, so the
+    // hover size can overshoot without the icon ever reaching the button's rounded edge.
+    new ButtonPulse(button, CanvasSize, CanvasSize + 5, CanvasSize - 3);
+    button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    // Native QToolTip popups render corrupted over this window's Vulkan/MoltenVK surface, so
+    // intentionally not setting one here.
+    button->setFixedSize(51, 51);
     button->setFocusPolicy(Qt::NoFocus);
     button->setProperty("pillButton", true);
     return button;
@@ -131,29 +404,213 @@ QToolButton* MakePillButton(const QString& glyph, const QString& tooltip, QWidge
 const QString DefaultStyleQss = QStringLiteral(
     "HomeScreenWidget, HomeScreenWidget QLabel, HomeScreenWidget QToolButton,"
     " HomeScreenWidget QListWidget { color: palette(text); background: transparent; }\n"
-    "#pillBar { background-color: palette(button); border-radius: 24px; }\n"
+    "#pillBar { background-color: palette(button); border-radius: 30px; }\n"
     "#tileList { background: transparent; border: none; }\n"
-    "#tileList::item { border-radius: 12px; padding: 4px; }\n"
-    "#tileList::item:selected { background-color: palette(highlight); }\n"
-    "#tileList::item:hover { background-color: palette(midlight); }\n"
+    "#tileList::item { border: none; padding: 0px; background: transparent; }\n"
+    "#tileList::item:selected { background: transparent; }\n"
+    "#tileList::item:hover { background: transparent; }\n"
     "#largeAddButton { border: 3px dashed palette(mid); border-radius: 20px;"
     " background: transparent; font-size: 32px; color: palette(text); }\n"
     "#largeAddButton:hover { background-color: palette(midlight); }\n"
-    "QToolButton[pillButton=\"true\"] { border-radius: 18px; border: none;"
+    "QToolButton[pillButton=\"true\"] { border-radius: 25px; border: none;"
     " background: transparent; font-size: 16px; }\n"
-    "QToolButton[pillButton=\"true\"]:hover { background-color: palette(highlight); }\n");
+    // No hover fill: the icons sit directly on the pill bar with no highlight disc behind them.
+    "QToolButton[pillButton=\"true\"]:hover { background: transparent; }\n");
+
+// All home-screen-specific user data (custom covers, live style, etc.) lives under its own
+// "user" subfolder, a sibling of Azahar's existing config/sdmc/nand dirs, rather than loose
+// inside config/.
+QString UserDataDir() {
+    const QString config_dir =
+        QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::ConfigDir));
+    QDir dir(config_dir);
+    dir.cdUp();
+    const QString user_dir = dir.absoluteFilePath(QStringLiteral("user"));
+    QDir().mkpath(user_dir);
+    return user_dir + QStringLiteral("/");
+}
 
 QString ExternalStylePath() {
-    return QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::ConfigDir)) +
-           QStringLiteral("home_screen_style.qss");
+    return UserDataDir() + QStringLiteral("home_screen_style.qss");
 }
 
 QString CustomCoversPath() {
-    return QString::fromStdString(FileUtil::GetUserPath(FileUtil::UserPath::ConfigDir)) +
-           QStringLiteral("custom_covers.txt");
+    return UserDataDir() + QStringLiteral("custom_covers.txt");
+}
+
+// Icons are loose files inside the app bundle's Resources/home_icons/ folder rather than
+// compiled into the binary via a Qt resource (.qrc), so they can be swapped without a rebuild.
+QString HomeIconPath(const QString& file_name) {
+    const QString app_dir = QCoreApplication::applicationDirPath();
+#ifdef Q_OS_MAC
+    return app_dir + QStringLiteral("/../Resources/home_icons/") + file_name;
+#else
+    return app_dir + QStringLiteral("/home_icons/") + file_name;
+#endif
 }
 
 } // namespace
+
+// QSS has no transition/animation support, so a smooth per-tile hover effect (gentle scale-up +
+// glow) needs an actual item delegate driving a QVariantAnimation and repainting on each tick.
+// Hover enter/leave is tracked via a viewport event filter installed by the owning widget.
+class TileHoverDelegate : public QStyledItemDelegate {
+public:
+    // Title text isn't set via QListWidgetItem::setText() (that's always rendered by Qt's
+    // default delegate); it's stashed in this role instead and only painted in manually, on
+    // hover/select, so idle tiles show square art with no label at all.
+    static constexpr int TitleRole = Qt::UserRole + 103;
+    /// Band reserved *below* the art for the hover title. The art never enters this band, so
+    /// the label can't collide with the cover image the way a centered overlay would.
+    static constexpr int TitleStripHeight = 22;
+    /// Slack around the art inside its own cell. The hover animation scales the art up about
+    /// its centre, and the view clips painting to the cell rect — without this margin the
+    /// enlarged art would get its edges shaved off mid-animation.
+    static constexpr int HoverPadding = 8;
+    /// How much the art grows at full hover.
+    static constexpr qreal HoverScale = 0.06;
+    /// Mirrors HomeScreenWidget::AddDirectoryRole (private there, needed here to tell the
+    /// trailing "+" tile apart from real games so it can skip the hover border).
+    static constexpr int AddTileRole = Qt::UserRole + 100;
+
+    explicit TileHoverDelegate(QListWidget* view)
+        : QStyledItemDelegate(view), tile_list(view) {
+        animation.setDuration(140);
+        animation.setEasingCurve(QEasingCurve::OutCubic);
+        QObject::connect(&animation, &QVariantAnimation::valueChanged, view,
+                         [this](const QVariant& value) {
+                             progress = value.toReal();
+                             if (tile_list) {
+                                 tile_list->viewport()->update();
+                             }
+                         });
+    }
+
+    void SetHoveredIndex(const QModelIndex& index) {
+        if (index == hovered_index) {
+            return;
+        }
+        hovered_index = index;
+        animation.stop();
+        // Moving straight from one tile to another restarts the fade from 0 rather than
+        // carrying the old tile's progress over, so the newly hovered tile animates in
+        // properly instead of snapping to fully-highlighted.
+        progress = hovered_index.isValid() ? 0.0 : progress;
+        animation.setStartValue(progress);
+        animation.setEndValue(hovered_index.isValid() ? 1.0 : 0.0);
+        animation.start();
+        // Repaint unconditionally. If the animation's start and end values happen to match it
+        // emits no valueChanged at all, so nothing else would request a repaint and the tile
+        // just left would keep its stale highlight painted — showing two hovered tiles at once.
+        if (tile_list) {
+            tile_list->viewport()->update();
+        }
+    }
+
+    // Overrides the title text color (instead of the inherited palette color) so it can track
+    // the background's brightness: white text on a dark wallpaper, black text on a bright one.
+    void SetTextColor(const QColor& color) {
+        text_color = color;
+        if (tile_list) {
+            tile_list->viewport()->update();
+        }
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        Q_UNUSED(option);
+        Q_UNUSED(index);
+        const QSize icon_size = tile_list->iconSize();
+        return QSize(icon_size.width() + HoverPadding * 2,
+                     icon_size.height() + HoverPadding * 2 + TitleStripHeight);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+              const QModelIndex& index) const override {
+        // Only the live-hovered tile gets emphasis. Qt's native State_Selected persists on
+        // whatever was last clicked even after the pointer moves elsewhere, which would show
+        // two highlighted tiles at once (the old selection and the new hover) if used here.
+        const qreal emphasis = (index == hovered_index) ? progress : 0.0;
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setRenderHint(QPainter::SmoothPixmapTransform);
+
+        // Cell layout, top to bottom: [HoverPadding][art][HoverPadding][title band].
+        // Giving the art and the label disjoint bands is what stops the title from being
+        // painted over the cover art.
+        const QRect cell = option.rect;
+        const QSize icon_size = tile_list->iconSize();
+        QRect icon_rect(0, 0, icon_size.width(), icon_size.height());
+        icon_rect.moveCenter(
+            QPoint(cell.center().x(), cell.top() + HoverPadding + icon_size.height() / 2));
+
+        // Taste rule 1: focus reads as scale + luminance inversion, never an outline. A plate
+        // in the opposite luminance to the foreground is laid under the art and inflated past
+        // it, so the focused tile gains a bright (or dark) surround the way the Switch's
+        // Sticker Book flips its focused row to solid white.
+        if (emphasis > 0.0) {
+            QColor plate = text_color;
+            plate.setAlphaF(0.92 * emphasis);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(plate);
+            const qreal grow = (icon_rect.width() * HoverScale) / 2.0 + 4.0 * emphasis;
+            painter->drawRoundedRect(QRectF(icon_rect).adjusted(-grow, -grow, grow, grow), 7, 7);
+        }
+
+        // The art is the only thing that scales; the label stays put so it doesn't jitter.
+        painter->save();
+        const qreal scale = 1.0 + HoverScale * emphasis;
+        painter->translate(icon_rect.center());
+        painter->scale(scale, scale);
+        painter->translate(-icon_rect.center());
+
+        // QListWidgetItem stores its icon as a QIcon, not a QPixmap — asking the QVariant for
+        // a QPixmap directly silently yields a null one (no implicit QIcon->QPixmap converter).
+        const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+        if (!icon.isNull()) {
+            painter->drawPixmap(icon_rect, icon.pixmap(icon_rect.size()));
+        }
+
+        painter->restore();
+
+        // Title fades in underneath the art, inside its own reserved band.
+        if (emphasis > 0.0) {
+            const QString title = index.data(TitleRole).toString();
+            if (!title.isEmpty()) {
+                const QRect title_rect(cell.left(), icon_rect.bottom() + HoverPadding,
+                                       cell.width(), TitleStripHeight);
+                QColor title_color = text_color;
+                title_color.setAlphaF(emphasis);
+                painter->setPen(title_color);
+                QFont title_font = painter->font();
+                title_font.setPointSize(qMax(8, title_font.pointSize() - 1));
+                painter->setFont(title_font);
+                const QString elided = painter->fontMetrics().elidedText(
+                    title, Qt::ElideRight, title_rect.width() - 4);
+                painter->drawText(title_rect, Qt::AlignHCenter | Qt::AlignTop, elided);
+            }
+        }
+
+        painter->restore();
+    }
+
+private:
+    QListWidget* tile_list;
+    QModelIndex hovered_index;
+    QVariantAnimation animation;
+    qreal progress = 0.0;
+    QColor text_color = Qt::white;
+};
+
+// Full on-screen footprint of one tile, derived from the delegate's own layout constants so the
+// view's grid/width math can never drift out of sync with what paint() actually draws.
+static int TileCellWidth(int icon_size) {
+    return icon_size + TileHoverDelegate::HoverPadding * 2 + TileSpacing * 2;
+}
+
+static int TileCellHeight(int icon_size) {
+    return icon_size + TileHoverDelegate::HoverPadding * 2 + TileHoverDelegate::TitleStripHeight;
+}
 
 // Stored as plain tab-separated "game_path\tcover_path" lines rather than QSettings/INI,
 // since game paths contain '/' which QSettings would otherwise parse as a group separator.
@@ -195,6 +652,7 @@ HomeScreenWidget::HomeScreenWidget(QStandardItemModel* source_model_, QWidget* p
     clock_timer = new QTimer(this);
     connect(clock_timer, &QTimer::timeout, this, &HomeScreenWidget::UpdateClock);
     clock_timer->start(30'000);
+    UpdateBattery();
     Refresh();
 
     const QString style_path = ExternalStylePath();
@@ -220,10 +678,63 @@ HomeScreenWidget::HomeScreenWidget(QStandardItemModel* source_model_, QWidget* p
 void HomeScreenWidget::ReloadExternalStyle() {
     QFile file(ExternalStylePath());
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        setStyleSheet(DefaultStyleQss);
+        external_style_qss = DefaultStyleQss;
+    } else {
+        external_style_qss = QTextStream(&file).readAll();
+    }
+    ApplyCombinedStylesheet();
+}
+
+void HomeScreenWidget::ApplyCombinedStylesheet() {
+    // Appended after the loaded QSS so it wins the cascade (QSS applies later rules last),
+    // overriding whatever "color: palette(text)" the base/user stylesheet set, without
+    // requiring the user's own home_screen_style.qss to know about brightness detection.
+    // The empty-state "Add Game Directory" tile is styled by #largeAddButton, whose ID selector
+    // out-specifies the generic QToolButton rule above — so recolor its "+" glyph (color) and
+    // its square border (border-color) here too, following the same background detection: black
+    // on a light wallpaper, white on a dark one.
+    const QString text_color_override =
+        QStringLiteral("\nHomeScreenWidget, HomeScreenWidget QLabel, HomeScreenWidget "
+                       "QToolButton, HomeScreenWidget QListWidget { color: %1; }\n"
+                       // Plain QWidget containers (the populated/empty-state wrappers) aren't
+                       // matched by the class-specific rules above, so they fall through to the
+                       // active theme's app-wide stylesheet and paint its lighter panel colour —
+                       // showing up as a second, mismatched grey slab behind the shelf. Force
+                       // every descendant transparent; #pillBar keeps its fill via its ID rule,
+                       // which out-specifies this.
+                       "HomeScreenWidget QWidget { background: transparent; }\n"
+                       "#largeAddButton { color: %1; border-color: %1; }\n")
+            .arg(home_text_color.name());
+    setStyleSheet(external_style_qss + text_color_override);
+}
+
+// Fully custom white/black theme toggle (no native system palette involved).
+bool IsWhiteTheme() {
+    return UISettings::values.theme == QStringLiteral("white");
+}
+
+void HomeScreenWidget::UpdateTextColorForBackground() {
+    // No wallpaper means paintEvent falls back to the solid theme base fill — white theme is a
+    // light base (black text), every other theme is a dark base (white text). With a wallpaper,
+    // judge legibility by its actual brightness instead.
+    const qreal base_luminance = IsWhiteTheme() ? 1.0 : 0.0;
+    const qreal luminance =
+        background_pixmap.isNull() ? base_luminance : AverageLuminance(background_pixmap);
+    const QColor new_color = luminance > 0.6 ? QColor(Qt::black) : QColor(Qt::white);
+    if (new_color == home_text_color) {
         return;
     }
-    setStyleSheet(QTextStream(&file).readAll());
+    home_text_color = new_color;
+    if (tile_hover_delegate) {
+        tile_hover_delegate->SetTextColor(home_text_color);
+    }
+    ApplyCombinedStylesheet();
+    UpdateBattery(); // the icon is painted, so it needs re-rendering in the new colour
+    // The "+" add-directory tile is a painted pixmap, not QSS, so repaint it with the new color.
+    // Guarded by the early-return above, this can't loop (Refresh doesn't change the color).
+    if (tile_list) {
+        Refresh();
+    }
 }
 
 HomeScreenWidget::~HomeScreenWidget() = default;
@@ -242,9 +753,21 @@ void HomeScreenWidget::SetupUi() {
 
     clock_label = new QLabel(this);
     clock_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    QFont clock_font = clock_label->font();
+    clock_font.setPointSizeF(clock_font.pointSizeF() * 1.2);
+    clock_label->setFont(clock_font);
+
+    battery_label = new QLabel(this);
+    battery_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    battery_percent_label = new QLabel(this);
+    battery_percent_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
     top_bar->addWidget(title_label);
     top_bar->addStretch();
+    top_bar->addWidget(battery_label);
+    top_bar->addSpacing(4);
+    top_bar->addWidget(battery_percent_label);
+    top_bar->addSpacing(12);
     top_bar->addWidget(clock_label);
     main_layout->addLayout(top_bar);
 
@@ -257,7 +780,6 @@ void HomeScreenWidget::SetupUi() {
     auto* empty_row = new QHBoxLayout();
     large_add_button = new QToolButton(empty_state_container);
     large_add_button->setFixedSize(240, 240);
-    large_add_button->setToolTip(tr("Add Game Directory"));
     large_add_button->setFocusPolicy(Qt::NoFocus);
     large_add_button->setText(QStringLiteral("+\n") + tr("Add Game Directory"));
     large_add_button->setObjectName(QStringLiteral("largeAddButton"));
@@ -281,26 +803,37 @@ void HomeScreenWidget::SetupUi() {
     tile_list->setWrapping(false);
     tile_list->setResizeMode(QListWidget::Adjust);
     tile_list->setMovement(QListWidget::Static);
-    tile_list->setIconSize(QSize(TileIconSize, TileIconSize));
-    tile_list->setGridSize(QSize(TileIconSize + TileSpacing * 2, TileIconSize + 40));
+    tile_list->setIconSize(QSize(tile_icon_size, tile_icon_size));
+    tile_list->setGridSize(QSize(TileCellWidth(tile_icon_size),
+                                 TileCellHeight(tile_icon_size)));
     tile_list->setSpacing(TileSpacing);
     tile_list->setUniformItemSizes(true);
     tile_list->setSelectionMode(QAbstractItemView::SingleSelection);
     tile_list->setFrameShape(QFrame::NoFrame);
-    tile_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    // Hidden, not disabled: ScrollBarAlwaysOff only suppresses the visible scrollbar widget,
+    // wheel/trackpad scrolling through QAbstractItemView still works normally.
+    tile_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     tile_list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    tile_list->setFixedHeight(TileIconSize + 56);
+    tile_list->setFixedHeight(TileCellHeight(tile_icon_size) + TileSpacing * 2);
     tile_list->setObjectName(QStringLiteral("tileList"));
     tile_list->setContextMenuPolicy(Qt::CustomContextMenu);
+    tile_list->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    tile_list->setMouseTracking(true);
 
-    connect(tile_list, &QListWidget::itemActivated, this, &HomeScreenWidget::OnTileActivated);
-    // The "+" tile is an action button, not a selectable game: a single click should fire it
-    // immediately rather than waiting for the platform's double-click "activate" gesture.
-    connect(tile_list, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
-        if (item && item->data(AddDirectoryRole).toBool()) {
-            emit AddDirectory();
-        }
+    tile_hover_delegate = new TileHoverDelegate(tile_list);
+    tile_list->setItemDelegate(tile_hover_delegate);
+    tile_list->viewport()->installEventFilter(this);
+    connect(tile_list, &QListWidget::entered, this, [this](const QModelIndex& index) {
+        tile_hover_delegate->SetHoveredIndex(index);
     });
+
+    // Console-style activation: a single click launches, matching the Switch home menu. Qt's
+    // itemActivated only fires on the platform's double-click gesture, so itemClicked is the
+    // one wired up here; itemActivated stays connected as well so Enter/keyboard (and later
+    // controller) activation still works. OnTileActivated debounces so the two can't both fire
+    // for one gesture and boot the same game twice.
+    connect(tile_list, &QListWidget::itemClicked, this, &HomeScreenWidget::OnTileActivated);
+    connect(tile_list, &QListWidget::itemActivated, this, &HomeScreenWidget::OnTileActivated);
     connect(tile_list, &QListWidget::customContextMenuRequested, this,
             &HomeScreenWidget::OnTileContextMenu);
 
@@ -309,40 +842,74 @@ void HomeScreenWidget::SetupUi() {
     main_layout->addWidget(populated_container, 1);
     populated_container->hide();
 
-    main_layout->addSpacing(14);
-
-    // Floating pill-shaped dock bar, bottom-center. Always visible, independent of whether
-    // any games are loaded, since Settings/Power are useful either way.
+    // Floating pill-shaped dock. Always visible, independent of whether any games are loaded,
+    // since Settings/Power are useful either way. It is deliberately NOT placed in main_layout:
+    // it's positioned by hand in ApplyPillBarPlacement() so the user can park it along the
+    // bottom or down the left edge without restructuring the widget tree.
     pill_bar = new QWidget(this);
-    pill_bar->setFixedHeight(PillBarHeight);
     pill_bar->setObjectName(QStringLiteral("pillBar"));
-    auto* pill_layout = new QHBoxLayout(pill_bar);
-    pill_layout->setContentsMargins(10, 0, 10, 0);
+    pill_layout = new QBoxLayout(QBoxLayout::LeftToRight, pill_bar);
     pill_layout->setSpacing(6);
 
-    auto* profile_button = MakePillButton(QStringLiteral("\U0001F464"), tr("Profile"), pill_bar);
-    auto* settings_button = MakePillButton(QStringLiteral("⚙"), tr("Settings"), pill_bar);
-    auto* screenshots_button =
-        MakePillButton(QStringLiteral("\U0001F4F7"), tr("Screenshots"), pill_bar);
-    auto* add_dir_button =
-        MakePillButton(QStringLiteral("\U0001F4C1"), tr("Add Game Directory"), pill_bar);
-    auto* wallpaper_button =
-        MakePillButton(QStringLiteral("\U0001F5BC"), tr("Set Background Image"), pill_bar);
-    auto* power_button = MakePillButton(QStringLiteral("⏻"), tr("Quit"), pill_bar);
+    auto* profile_button =
+        MakeIconPillButton(HomeIconPath(QStringLiteral("profile.png")), tr("Profile"), pill_bar);
+    auto* settings_button =
+        MakeIconPillButton(HomeIconPath(QStringLiteral("settings.png")), tr("Settings"), pill_bar);
+    auto* add_dir_button = MakeIconPillButton(HomeIconPath(QStringLiteral("adddir.png")),
+                                              tr("Add Game Directory"), pill_bar);
+    auto* wallpaper_button = MakeIconPillButton(HomeIconPath(QStringLiteral("gallery.png")),
+                                                tr("Set Background Image"), pill_bar);
+    auto* power_button =
+        MakeIconPillButton(HomeIconPath(QStringLiteral("power.png")), tr("Quit"), pill_bar);
 
     connect(profile_button, &QToolButton::clicked, this, &HomeScreenWidget::OpenProfile);
     connect(settings_button, &QToolButton::clicked, this, &HomeScreenWidget::OpenSettings);
-    connect(screenshots_button, &QToolButton::clicked, this, &HomeScreenWidget::OpenScreenshots);
     connect(add_dir_button, &QToolButton::clicked, this, &HomeScreenWidget::AddDirectory);
     connect(wallpaper_button, &QToolButton::clicked, this, &HomeScreenWidget::OnChooseWallpaper);
     connect(power_button, &QToolButton::clicked, this, &HomeScreenWidget::PowerOff);
 
-    for (auto* button : {profile_button, settings_button, screenshots_button, add_dir_button,
-                         wallpaper_button, power_button}) {
-        pill_layout->addWidget(button);
+    // The buttons are a fixed 51px inside a 61px-thick pill, so without an explicit alignment
+    // they settle against the top-left corner of their slot instead of sitting on the pill's
+    // centre line. AlignCenter keeps them centred in whichever direction the dock is running.
+    for (auto* button : {profile_button, settings_button, add_dir_button, wallpaper_button,
+                         power_button}) {
+        pill_layout->addWidget(button, 0, Qt::AlignCenter);
     }
 
-    main_layout->addWidget(pill_bar, 0, Qt::AlignHCenter);
+    ApplyPillBarPlacement();
+}
+
+// Positions the dock by hand (it isn't in any layout) and reserves room for it in the content
+// margins so the tile shelf never slides underneath it.
+void HomeScreenWidget::ApplyPillBarPlacement() {
+    if (!pill_bar || !pill_layout) {
+        return;
+    }
+    constexpr int EdgeMargin = 14;
+    const bool vertical = UISettings::values.home_pill_position == 1;
+
+    pill_layout->setDirection(vertical ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    pill_layout->setContentsMargins(vertical ? 0 : 10, vertical ? 10 : 0, vertical ? 0 : 10,
+                                    vertical ? 10 : 0);
+    // Lock the cross-axis to the pill's thickness and let the main axis size to its buttons, so
+    // the rounded-rect background stays a true pill in either orientation.
+    pill_bar->setFixedSize(QSize(vertical ? PillBarHeight : pill_bar->sizeHint().width(),
+                                 vertical ? pill_bar->sizeHint().height() : PillBarHeight));
+
+    auto* main_layout = qobject_cast<QVBoxLayout*>(layout());
+    if (main_layout) {
+        // Reserve the dock's lane so content is laid out beside it rather than behind it.
+        main_layout->setContentsMargins(vertical ? 16 + PillBarHeight + EdgeMargin : 16, 12, 16,
+                                        vertical ? 12 : PillBarHeight + EdgeMargin);
+    }
+
+    if (vertical) {
+        pill_bar->move(EdgeMargin, (height() - pill_bar->height()) / 2);
+    } else {
+        pill_bar->move((width() - pill_bar->width()) / 2,
+                       height() - pill_bar->height() - EdgeMargin);
+    }
+    pill_bar->raise();
 }
 
 void HomeScreenWidget::ApplyAppearanceSettings() {
@@ -363,6 +930,7 @@ void HomeScreenWidget::ApplyAppearanceSettings() {
     } else {
         background_pixmap = QPixmap();
     }
+    UpdateTextColorForBackground();
 
     QFont font = title_label->font();
     if (!UISettings::values.home_font_family.isEmpty()) {
@@ -377,13 +945,25 @@ void HomeScreenWidget::ApplyAppearanceSettings() {
     title_font.setPointSize(font.pointSize() + 4);
     title_font.setBold(true);
     title_label->setFont(title_font);
-    clock_label->setFont(font);
+    QFont clock_font = font;
+    clock_font.setPointSizeF(font.pointSizeF() * 1.2);
+    clock_label->setFont(clock_font);
+    QFont battery_font = font;
+    battery_font.setPointSizeF(font.pointSizeF() * 0.95);
+    battery_percent_label->setFont(battery_font);
     tile_list->setFont(font);
 
+    ApplyPillBarPlacement(); // dock side is an appearance setting too
     update();
 }
 
 void HomeScreenWidget::paintEvent(QPaintEvent* event) {
+    {
+        // Solid theme base fill: white for the custom White theme, dark for everything else.
+        QPainter base_painter(this);
+        base_painter.fillRect(rect(), IsWhiteTheme() ? QColor(0xff, 0xff, 0xff)
+                                                     : QColor(0x18, 0x18, 0x1c));
+    }
     if (!background_pixmap.isNull()) {
         QPainter painter(this);
         const QPixmap scaled = background_pixmap.scaled(size(), Qt::KeepAspectRatioByExpanding,
@@ -395,14 +975,107 @@ void HomeScreenWidget::paintEvent(QPaintEvent* event) {
     QWidget::paintEvent(event);
 }
 
+void HomeScreenWidget::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    ApplyPillBarPlacement(); // hand-positioned, so it has to follow the window
+    UpdateTileIconSizeForWidth(width());
+    UpdateTileListWidth();
+}
+
+bool HomeScreenWidget::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == tile_list->viewport() && event->type() == QEvent::Leave) {
+        tile_hover_delegate->SetHoveredIndex(QModelIndex());
+    }
+    // Inertial horizontal scrolling. Qt's default wheel handling jumps the shelf a fixed number
+    // of items per notch, which reads as a hard snap. Instead each notch retargets an animation
+    // that eases the scrollbar across, and successive notches accumulate onto the pending
+    // target rather than restarting from wherever the animation happens to be mid-flight.
+    if (watched == tile_list->viewport() && event->type() == QEvent::Wheel) {
+        auto* wheel = static_cast<QWheelEvent*>(event);
+        QScrollBar* bar = tile_list->horizontalScrollBar();
+        if (!bar || bar->maximum() == 0) {
+            return QWidget::eventFilter(watched, event);
+        }
+        // Trackpads report fine-grained pixelDelta; mouse wheels only report angleDelta in
+        // eighths of a degree. Fall back to the vertical axis since most wheels have no
+        // horizontal one but users still expect them to scroll this shelf.
+        int delta = wheel->pixelDelta().x();
+        if (delta == 0) {
+            delta = wheel->pixelDelta().y();
+        }
+        if (delta == 0) {
+            const QPoint angle = wheel->angleDelta();
+            const int ticks = (angle.x() != 0 ? angle.x() : angle.y());
+            delta = ticks * tile_icon_size / 120; // one notch ≈ one tile
+        }
+        if (delta == 0) {
+            return QWidget::eventFilter(watched, event);
+        }
+
+        if (!scroll_animation) {
+            scroll_animation = new QPropertyAnimation(bar, "value", this);
+            scroll_animation->setEasingCurve(QEasingCurve::OutCubic);
+            scroll_animation->setDuration(260);
+        }
+        const bool running = scroll_animation->state() == QAbstractAnimation::Running;
+        const int base = running ? scroll_animation->endValue().toInt() : bar->value();
+        const int target = qBound(bar->minimum(), base - delta, bar->maximum());
+        if (target != bar->value() || running) {
+            scroll_animation->stop();
+            scroll_animation->setStartValue(bar->value());
+            scroll_animation->setEndValue(target);
+            scroll_animation->start();
+        }
+        return true; // swallow it so Qt's own stepped scrolling doesn't fight the animation
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void HomeScreenWidget::UpdateClock() {
     clock_label->setText(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm")));
+    UpdateBattery();
+}
+
+void HomeScreenWidget::UpdateBattery() {
+    if (!battery_label) {
+        return;
+    }
+    const BatteryState state = ReadBatteryState();
+    battery_label->setPixmap(
+        RenderBatteryIcon(state, home_text_color, devicePixelRatioF()));
+    // Taste rule 7: the status cluster stays quiet, so the percentage rides beside the pill at
+    // a smaller size rather than competing with the clock.
+    battery_percent_label->setText(QStringLiteral("%1%").arg(state.percent));
+    battery_label->setToolTip(state.charging ? tr("Battery %1% (charging)").arg(state.percent)
+                                             : tr("Battery %1%").arg(state.percent));
+}
+
+void HomeScreenWidget::UpdateTileIconSizeForWidth(int available_width) {
+    const int count = tile_list->count();
+    if (count == 0) {
+        return;
+    }
+    const int usable = qMax(available_width - 32, MinTileIconSize);
+    // Subtract the per-tile chrome (hover slack + spacing) so the icon size that comes out is
+    // what actually fits once the full cell footprint is accounted for.
+    int candidate =
+        usable / count - TileSpacing * 2 - TileHoverDelegate::HoverPadding * 2;
+    candidate = qBound(MinTileIconSize, candidate, MaxTileIconSize);
+    if (candidate == tile_icon_size) {
+        return;
+    }
+    tile_icon_size = candidate;
+    tile_list->setIconSize(QSize(tile_icon_size, tile_icon_size));
+    tile_list->setGridSize(QSize(TileCellWidth(tile_icon_size),
+                                 TileCellHeight(tile_icon_size)));
+    tile_list->setFixedHeight(TileCellHeight(tile_icon_size) + TileSpacing * 2);
+    Refresh(); // Re-render icons at the new size instead of just stretching the old pixmaps.
 }
 
 void HomeScreenWidget::UpdateTileListWidth() {
     const int count = tile_list->count();
-    const int natural_width = count * (TileIconSize + TileSpacing * 2);
-    const int max_width = qMax(width() - 32, TileIconSize + TileSpacing * 2);
+    const int natural_width = count * TileCellWidth(tile_icon_size);
+    const int max_width = qMax(width() - 32, TileCellWidth(tile_icon_size));
     tile_list->setFixedWidth(qMin(natural_width, max_width));
 }
 
@@ -430,6 +1103,9 @@ void HomeScreenWidget::Refresh() {
     if (!source_model) {
         return;
     }
+    if (tile_hover_delegate) {
+        tile_hover_delegate->SetHoveredIndex(QModelIndex());
+    }
     tile_list->clear();
 
     std::vector<QStandardItem*> game_items;
@@ -452,38 +1128,43 @@ void HomeScreenWidget::Refresh() {
             icon = item->data(Qt::DecorationRole).value<QPixmap>();
         }
         if (icon.isNull()) {
-            icon = QPixmap(TileIconSize, TileIconSize);
+            icon = QPixmap(tile_icon_size, tile_icon_size);
             icon.fill(Qt::darkGray);
         }
 
-        auto* tile = new QListWidgetItem(QIcon(RoundedPixmap(icon, TileIconSize, 16)), title);
+        // Near-square corners (radius 3) matching the reference Switch-style shelf, not the
+        // heavily rounded 16px used elsewhere in this UI.
+        auto* tile = new QListWidgetItem(
+            QIcon(RoundedPixmap(icon, tile_icon_size, 3, devicePixelRatioF())), QString());
         tile->setData(FullPathRole, full_path);
-        tile->setTextAlignment(Qt::AlignHCenter);
-        tile->setToolTip(title);
+        tile->setData(TileHoverDelegate::TitleRole, title);
         tile_list->addItem(tile);
         ++games_added;
     }
 
     // Trailing "+" tile to add a new game directory, Switch-cartridge-slot style.
-    QPixmap plus_pixmap(TileIconSize, TileIconSize);
+    const qreal dpr = devicePixelRatioF();
+    QPixmap plus_pixmap(qRound(tile_icon_size * dpr), qRound(tile_icon_size * dpr));
+    plus_pixmap.setDevicePixelRatio(dpr);
     plus_pixmap.fill(Qt::transparent);
     {
         QPainter painter(&plus_pixmap);
         painter.setRenderHint(QPainter::Antialiasing);
-        QPen pen(palette().color(QPalette::Mid));
+        // Follow background detection: black "+" and square on a light wallpaper, white on dark.
+        QPen pen(home_text_color);
         pen.setWidth(3);
         pen.setStyle(Qt::DashLine);
         painter.setPen(pen);
-        painter.drawRoundedRect(2, 2, TileIconSize - 4, TileIconSize - 4, 16, 16);
+        painter.drawRoundedRect(2, 2, tile_icon_size - 4, tile_icon_size - 4, 3, 3);
         QFont plus_font = font();
         plus_font.setPointSize(28);
         painter.setFont(plus_font);
-        painter.drawText(QRect(0, 0, TileIconSize, TileIconSize), Qt::AlignCenter,
+        painter.drawText(QRect(0, 0, tile_icon_size, tile_icon_size), Qt::AlignCenter,
                          QStringLiteral("+"));
     }
-    auto* add_tile = new QListWidgetItem(QIcon(plus_pixmap), tr("Add Game Directory"));
+    auto* add_tile = new QListWidgetItem(QIcon(plus_pixmap), QString());
     add_tile->setData(AddDirectoryRole, true);
-    add_tile->setTextAlignment(Qt::AlignHCenter);
+    add_tile->setData(TileHoverDelegate::TitleRole, tr("Add Game Directory"));
     tile_list->addItem(add_tile);
 
     UpdateTileListWidth();
@@ -527,7 +1208,19 @@ void HomeScreenWidget::OnTileContextMenu(const QPoint& pos) {
             this, tr("Select Cover Image"), QString(),
             tr("Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff)"));
         if (!image_path.isEmpty()) {
-            custom_covers.insert(full_path, image_path);
+            // Copy into our own user data folder rather than keeping a reference to wherever
+            // the user picked it from, so the cover survives the source file moving/deleting
+            // and travels with the app's user data.
+            const QString covers_dir = UserDataDir() + QStringLiteral("covers/");
+            QDir().mkpath(covers_dir);
+            const QString ext = QFileInfo(image_path).suffix();
+            const QString stored_path =
+                covers_dir +
+                QString::number(qHash(full_path), 16) +
+                (ext.isEmpty() ? QString() : QStringLiteral(".") + ext);
+            QFile::remove(stored_path);
+            QFile::copy(image_path, stored_path);
+            custom_covers.insert(full_path, stored_path);
             SaveCustomCovers();
             Refresh();
         }
@@ -542,6 +1235,16 @@ void HomeScreenWidget::OnTileActivated(QListWidgetItem* item) {
     if (!item) {
         return;
     }
+    // Both itemClicked and itemActivated route here so a single click launches while keyboard
+    // (and controller) activation keeps working — but a double-click fires both, so ignore any
+    // follow-up within the platform's double-click window.
+    if (tile_activation_locked) {
+        return;
+    }
+    tile_activation_locked = true;
+    QTimer::singleShot(QApplication::doubleClickInterval(), this,
+                       [this] { tile_activation_locked = false; });
+
     if (item->data(AddDirectoryRole).toBool()) {
         emit AddDirectory();
         return;

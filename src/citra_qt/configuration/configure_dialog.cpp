@@ -2,8 +2,10 @@
 // Licensed under GPLv2 or any later version
 // Refer to the misc/licenses/gplv2.txt file included.
 
+#include <array>
 #include <map>
 #include <QListWidgetItem>
+#include <QTabBar>
 #include "citra_qt/configuration/configure_audio.h"
 #include "citra_qt/configuration/configure_camera.h"
 #include "citra_qt/configuration/configure_debug.h"
@@ -70,6 +72,12 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_, Cor
     connect(ui->selectorList, &QListWidget::itemSelectionChanged, this,
             &ConfigureDialog::UpdateVisibleTabs);
 
+    // Single vertical column of settings: the top category tab bar is hidden, so the sidebar
+    // list is the only navigation and each list row maps to exactly one page.
+    if (auto* bar = ui->tabWidget->findChild<QTabBar*>()) {
+        bar->hide();
+    }
+
     adjustSize();
     ui->selectorList->setCurrentRow(0);
 
@@ -87,7 +95,25 @@ ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_, Cor
 ConfigureDialog::~ConfigureDialog() = default;
 
 void ConfigureDialog::SetActiveTab(int index) {
-    ui->tabWidget->setCurrentIndex(index);
+    // Callers still pass the legacy tabWidget index; map it to the page widget and select the
+    // matching row in the flattened single-column list (which drives UpdateVisibleTabs).
+    const std::array<QWidget*, 14> legacy_order{
+        general_tab.get(),    system_tab.get(),  input_tab.get(),  hotkeys_controller_tab.get(),
+        hotkeys_tab.get(),    graphics_tab.get(), enhancements_tab.get(), layout_tab.get(),
+        audio_tab.get(),      camera_tab.get(),  debug_tab.get(),  storage_tab.get(),
+        web_tab.get(),        ui_tab.get()};
+    if (index < 0 || index >= static_cast<int>(legacy_order.size())) {
+        index = 0;
+    }
+    QWidget* const target = legacy_order[index];
+    for (int i = 0; i < ui->selectorList->count(); ++i) {
+        const auto tabs =
+            qvariant_cast<QList<QWidget*>>(ui->selectorList->item(i)->data(Qt::UserRole));
+        if (tabs.contains(target)) {
+            ui->selectorList->setCurrentRow(i);
+            return;
+        }
+    }
 }
 
 void ConfigureDialog::SetConfiguration() {
@@ -130,16 +156,28 @@ Q_DECLARE_METATYPE(QList<QWidget*>);
 void ConfigureDialog::PopulateSelectionList() {
     ui->selectorList->clear();
 
-    const std::array<std::pair<QString, QList<QWidget*>>, 5> items{
-        {{tr("General"), {general_tab.get(), web_tab.get(), debug_tab.get(), ui_tab.get()}},
-         {tr("System"), {system_tab.get(), camera_tab.get(), storage_tab.get()}},
-         {tr("Graphics"), {enhancements_tab.get(), layout_tab.get(), graphics_tab.get()}},
-         {tr("Audio"), {audio_tab.get()}},
-         {tr("Controls"), {input_tab.get(), hotkeys_controller_tab.get(), hotkeys_tab.get()}}}};
+    // Flat, single-column list: every page is its own row (no General/Network/Debug/UI
+    // grouping). Each row carries a one-element tab list so UpdateVisibleTabs shows just
+    // that page in the (bar-hidden) tab widget.
+    const std::array<std::pair<QString, QWidget*>, 14> items{
+        {{tr("General"), general_tab.get()},
+         {tr("Network"), web_tab.get()},
+         {tr("Debug"), debug_tab.get()},
+         {tr("UI"), ui_tab.get()},
+         {tr("System"), system_tab.get()},
+         {tr("Camera"), camera_tab.get()},
+         {tr("Storage"), storage_tab.get()},
+         {tr("Enhancements"), enhancements_tab.get()},
+         {tr("Layout"), layout_tab.get()},
+         {tr("Advanced"), graphics_tab.get()},
+         {tr("Audio"), audio_tab.get()},
+         {tr("Input"), input_tab.get()},
+         {tr("Controller Hotkeys"), hotkeys_controller_tab.get()},
+         {tr("Keyboard Hotkeys"), hotkeys_tab.get()}}};
 
     for (const auto& entry : items) {
         auto* const item = new QListWidgetItem(entry.first);
-        item->setData(Qt::UserRole, QVariant::fromValue(entry.second));
+        item->setData(Qt::UserRole, QVariant::fromValue(QList<QWidget*>{entry.second}));
 
         ui->selectorList->addItem(item);
     }

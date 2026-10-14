@@ -1,141 +1,150 @@
 ![Azahar Emulator](https://azahar-emu.org/resources/images/logo/azahar-name-and-logo.svg)
 
-![Current Release](https://img.shields.io/github/v/release/azahar-emu/azahar?label=Current%20Release)
-![Current Prerelease](https://img.shields.io/github/v/release/azahar-emu/azahar?include_prereleases&label=Current%20Prerelease)
+# Azahar — Switch UI Fork
 
-![GitHub Downloads](https://img.shields.io/github/downloads/azahar-emu/azahar/total?logo=github&label=GitHub%20Downloads)
-![Google Play Downloads](https://playbadges.pavi2410.com/badge/downloads?id=io.github.lime3ds.android&pretty&label=Play%20Store%20Downloads)
-![Flathub Downloads](https://img.shields.io/flathub/downloads/org.azahar_emu.Azahar?logo=flathub&label=Flathub%20Downloads)
-![CI Build Status](https://github.com/azahar-emu/azahar/actions/workflows/build.yml/badge.svg)
+This is a personal fork of [Azahar](https://github.com/azahar-emu/azahar), a free and open-source
+high-level Nintendo 3DS emulator. This fork replaces the stock game list with a custom
+Switch-style home screen (tile shelf + pill dock bar), adds custom cover art, a custom
+background, and an in-window settings popup.
 
-**Azahar** is a free and open-source high level Nintendo 3DS emulator for PC and mobile devices. Our goal is to give 3DS owners a place to enjoy their library of titles with improvements to the original hardware, such as higher resolutions, modern controllers or save states. The emulator also serves as a debugging hub for homebrew developers and as a research and preservation platform for the 3DS ecosystem.
+*Azahar is not affiliated with or endorsed by Nintendo. This fork is not affiliated with the
+upstream Azahar project.*
 
-The project continues the legacy of **Citra** and is actively developed by a community of contributors.
-
-*Azahar is not affiliated with or endorsed by Nintendo.*
-
-# Installation
-
-### Windows
-
-Azahar is available as both an installer and a zip archive.
-
-Download the latest release in your preferred format from the [Releases](https://github.com/azahar-emu/azahar/releases) page.
-
-If you are unsure of whether you want to use MSVC or MXE, use MXE.
+Repo: https://github.com/yuske014/azahar-switch-ui
 
 ---
 
-### MacOS
+# Build from source
 
-To download a build that will work on all Macs, you can download the `macos-universal` build on the [Releases](https://github.com/azahar-emu/azahar/releases) page.
+There are no prebuilt releases of this fork — build it yourself with the commands below. Pick
+your OS.
 
-Alternatively, if you wish to download a build specifically for your Mac, you can choose either:
+## Requirements (all platforms)
 
-- `macos-arm64` for Apple Silicon Macs
-- `macos-x86_64` for Intel Macs
+- [Git](https://git-scm.com/) and [Git LFS](https://git-lfs.com/) (`git lfs install` after
+  installing — one submodule needs it)
+- [CMake](https://cmake.org/) 3.25+
+- [Ninja](https://ninja-build.org/)
+- A C++20 compiler (Clang/AppleClang on macOS, GCC/Clang on Linux, MSVC on Windows)
+- [Qt 6](https://www.qt.io/) (6.5+)
+
+## 1. Clone the repo (same on every OS)
+
+```sh
+git clone https://github.com/yuske014/azahar-switch-ui.git azahar
+cd azahar
+git submodule update --init --recursive
+```
 
 ---
 
-### Android
+## macOS
 
-There are two variants of Azahar available on Android, those being the Vanilla and Google Play builds.
+```sh
+# Dependencies
+xcode-select --install          # Xcode command line tools (compiler)
+brew install cmake ninja qt@6
 
-The Vanilla build is technically superior, as it uses an alternative method of file management which is faster, but isn't permitted on the Google Play store.
+# Configure + build (arm64 Apple Silicon; use x86_64 on Intel Macs)
+mkdir -p build/arm64 && cd build/arm64
+cmake ../.. -GNinja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_OSX_ARCHITECTURES="arm64" \
+    -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
+    -DENABLE_LTO=OFF
+ninja
 
-For most users, we currently recommended downloading Azahar on Android via the Google Play Store for ease of accessibility:
+# Build the .app bundle
+export PATH="$(brew --prefix qt@6)/bin:$PATH"
+ninja bundle
 
-<a href='https://play.google.com/store/apps/details?id=io.github.lime3ds.android'><img width='180' alt='Get it on Google Play' src='https://raw.githubusercontent.com/pioug/google-play-badges/06ccd9252af1501613da2ca28eaffe31307a4e6d/svg/English.svg'/></a>
+# Run it
+open bundle/azahar.app
+```
 
-Alternatively, you can install the app using Obtainium, allowing you to use the Vanilla variant:
-1. Download and install Obtainium from [here](https://github.com/ImranR98/Obtainium/releases) (use the file named `app-release.apk`)
-2. Open Obtainium and click 'Add App'
-3. Type `https://github.com/azahar-emu/azahar` into the 'App Source URL' section
-4. Click 'Add'
-5. Click 'Install', and select the preferred variant
-
-If you wish, you can also simply install the latest APK from the [Releases](https://github.com/azahar-emu/azahar/releases) page.
-
-Keep in mind that you will not recieve automatic updates when installing via the APK.
+> First launch: macOS will warn the app is from an unidentified developer (it's unsigned).
+> Right-click the app → Open, or run `xattr -cr bundle/azahar.app` once before launching.
 
 ---
 
-### Linux
+## Linux (Debian/Ubuntu)
 
-The recommended format for using Azahar on Linux is the Flatpak available on Flathub:
+```sh
+# Dependencies
+sudo apt update
+sudo apt install -y build-essential cmake ninja-build pkg-config git git-lfs \
+    qt6-base-dev qt6-multimedia-dev qt6-tools-dev qt6-tools-dev-tools \
+    libqt6svg6-dev libsdl2-dev libssl-dev libzip-dev libpng-dev \
+    libvulkan-dev mesa-common-dev
 
-<a href='https://flathub.org/apps/org.azahar_emu.Azahar'><img width='180' alt='Download on Flathub' src='https://dl.flathub.org/assets/badges/flathub-badge-en.png'/></a>
+# Configure + build
+mkdir build && cd build
+cmake .. -GNinja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DENABLE_LTO=OFF
+ninja
 
-Azahar is also available as an AppImage on the [Releases](https://github.com/azahar-emu/azahar/releases) page.
-
-There are two variants of the AppImage available, those being `azahar.AppImage` and `azahar-wayland.AppImage`.
-
-If you are unsure of which variant to use, we recommend using the default `azahar.AppImage`. This is because of upstream issues in the Wayland ecosystem which may cause problems when running the emulator (e.g. [#1162](https://github.com/azahar-emu/azahar/issues/1162)).
-
-Unless you explicitly require native Wayland support (e.g. you are running a system with no Xwayland), the non-Wayland variant is recommended.
-
-The Flatpak build of Azahar also has native Wayland support disabled by default. If you require native Wayland support, it can be enabled using [Flatseal](https://flathub.org/en/apps/com.github.tchx84.Flatseal).
-
-# Build instructions
-
-Please refer this repository's [wiki](https://github.com/azahar-emu/azahar/wiki/Building-From-Source) for build instructions
-
-# How can I contribute?
-
-### Pull requests
-
-If you want to implement a change and have the technical capability to do so, we would be happy to accept your contributions.
-
-If you are contributing a new feature, it is highly suggested that you first make a Feature Request issue to discuss the addition before writing any code. This is to ensure that your time isn't wasted working on a feature which isn't deemed appropriate for the project.
-
-After creating a pull request, please don't repeatedly merge `master` into your branch. A maintainer will update the branch for you if/ when it is appropriate to do so.
-
-### Language translations
-
-Additionally, we are accepting language translations on [Transifex](https://app.transifex.com/azahar/azahar). If you know a non-english language listed on our Transifex page, please feel free to contribute.
-
-> [!NOTE]
-> We are not currently accepting new languages for translation. Please do not request for new languages or language variants to be added.
-
-### Compatibility reports
-
-Even if you don't wish to contribute code or translations, you can help the project by reporting game compatibility data to our compatibility list.
-
-To do so, simply read https://github.com/azahar-emu/compatibility-list/blob/master/CONTRIBUTING.md and follow the instructions.
-
-Contributing compatibility data helps more accurately reflect the current capabilities of the emulator, so it would be highly appreciated if you could go through the reporting process after completing a game.
-
-# Minimum requirements
-
-Below are the minimum requirements to run Azahar:
-
-### Desktop
-
-```
-Operating System: Windows 10 (64-bit), MacOS 13.4 (Ventura), or modern 64-bit Linux
-CPU: x86-64/ARM64 CPU (Windows for ARM not supported).
-     Single core performance higher than 1,800 on Passmark.
-     SSE4.2 required on x86_64.
-GPU: OpenGL 4.3 or Vulkan 1.1 support
-Memory: 2GB of RAM. 4GB is recommended
-```
-### Android
-
-```
-Operating System: Android 10.0+ (64-bit)
-CPU: Snapdragon 835 SoC or better
-GPU: OpenGL ES 3.2 or Vulkan 1.1 support
-Memory: 2GB of RAM. 4GB is recommended
+# Run it
+./bin/Release/azahar
 ```
 
-# What's next?
+For other distros, install the equivalent Qt6/SDL2/Vulkan dev packages via your package
+manager (`dnf`, `pacman`, `zypper`, etc.) — same package names, minus the `-dev` suffix
+convention differences (e.g. Arch uses plain `qt6-base`, `sdl2`).
 
-We share public roadmaps for upcoming releases in the form of GitHub milestones.
+---
 
-You can find these at https://github.com/azahar-emu/azahar/milestones.
+## Windows (PowerShell)
 
-# Join the conversation
+The most reliable path is MSVC + [vcpkg](https://github.com/microsoft/vcpkg) for dependencies.
 
-We have a community Discord server where you can chat about the project, keep up to date with the latest announcements, or coordinate emulator development.
+```powershell
+# 1. Install Visual Studio Build Tools (includes MSVC) if you don't have it:
+#    https://visualstudio.microsoft.com/visual-cpp-build-tools/
+#    -> select "Desktop development with C++"
 
-Join at https://discord.gg/4ZjMpAp3M6
+# 2. Install CMake, Ninja, Qt6, Git, Git LFS (via winget)
+winget install Kitware.CMake Ninja-build.Ninja Git.Git qt.qt6 GitHub.GitLFS
+
+# 3. Set up vcpkg (for SDL2/zlib/etc.)
+git clone https://github.com/microsoft/vcpkg C:\vcpkg
+C:\vcpkg\bootstrap-vcpkg.bat
+
+# 4. Configure + build (run from the azahar repo root, in a "Developer PowerShell for VS")
+mkdir build; cd build
+cmake .. -GNinja `
+    -DCMAKE_BUILD_TYPE=Release `
+    -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
+    -DCMAKE_PREFIX_PATH="C:\Qt\6.x.x\msvc2022_64" `
+    -DENABLE_FFMPEG=OFF `
+    -DENABLE_LTO=OFF
+ninja
+
+# Run it
+.\bin\Release\azahar.exe
+```
+
+> Adjust the Qt path (`C:\Qt\6.x.x\msvc2022_64`) to match whatever version `winget` installed —
+> check `C:\Qt` after step 2. `-DENABLE_FFMPEG=OFF` skips the heavier FFmpeg/vcpkg build; drop
+> it (and `vcpkg install ffmpeg[...]:x64-windows-release` first) if you want video dumping
+> support.
+
+---
+
+# Notes on this fork
+
+- First launch creates a `user/` folder next to Azahar's normal config directory
+  (`~/Library/Application Support/Azahar/user/` on macOS, `~/.local/share/azahar/user/` on
+  Linux, `%APPDATA%\Azahar\user\` on Windows) — custom covers, the home screen background, and
+  the live-editable home screen stylesheet live there.
+- Right-click a game tile to set/remove a custom cover image.
+- The pill bar at the bottom of the home screen has: Profile, Settings, Add Game Directory,
+  Wallpaper, Power.
+
+---
+
+# Upstream project
+
+This fork tracks [azahar-emu/azahar](https://github.com/azahar-emu/azahar). See their
+[wiki](https://github.com/azahar-emu/azahar/wiki) for emulator usage docs, compatibility
+reporting, and general 3DS emulation questions unrelated to this fork's UI changes.

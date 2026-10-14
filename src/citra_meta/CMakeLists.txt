@@ -50,6 +50,47 @@ if (APPLE)
     endif()
 endif()
 
+# Home-screen icons and the custom UI font ship as loose files (not compiled into a .qrc) so
+# they can be swapped without a rebuild — which means the build has to actually place them next
+# to the binary. Without these rules the app silently falls back to blank icons and the system
+# font, since nothing else copies them.
+if (ENABLE_QT)
+    if (APPLE AND NOT IOS)
+        set(HOME_ASSET_DEST "$<TARGET_BUNDLE_CONTENT_DIR:citra_meta>/Resources")
+    else()
+        set(HOME_ASSET_DEST "$<TARGET_FILE_DIR:citra_meta>")
+    endif()
+    add_custom_command(TARGET citra_meta POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${HOME_ASSET_DEST}/home_icons"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PROJECT_SOURCE_DIR}/dist/home_screen_icons"
+                "${HOME_ASSET_DEST}/home_icons"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${PROJECT_SOURCE_DIR}/dist/fonts/NINTENDOSWITCHUI.TTF"
+                "${HOME_ASSET_DEST}/NINTENDOSWITCHUI.TTF"
+        COMMENT "Copying home screen icons and UI font into the app"
+        VERBATIM
+    )
+
+    # macOS privacy (TCC) grants are keyed on the code signature's designated requirement. A
+    # linker-signed/ad-hoc binary has no stable identity — its requirement is the cdhash, which
+    # changes on every single relink, so macOS treats each rebuild as a brand new app and
+    # re-prompts for Downloads/Documents access forever. Signing with a fixed local certificate
+    # pins the requirement to "bundle id + cert", which stays constant across rebuilds, so the
+    # permission is granted once and then remembered.
+    #
+    # This must run AFTER the resource copy above: codesign seals the bundle contents, so adding
+    # files afterwards would invalidate the signature.
+    if (APPLE AND NOT IOS AND MACOS_CODESIGN_IDENTITY)
+        add_custom_command(TARGET citra_meta POST_BUILD
+            COMMAND sh -c
+                "codesign --force --deep --sign '${MACOS_CODESIGN_IDENTITY}' '$<TARGET_BUNDLE_DIR:citra_meta>' || echo 'warning: codesign with ${MACOS_CODESIGN_IDENTITY} failed; falling back to ad-hoc signature (macOS will re-prompt for file access after each rebuild)'"
+            COMMENT "Signing app with stable local identity (${MACOS_CODESIGN_IDENTITY})"
+            VERBATIM
+        )
+    endif()
+endif()
+
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND MINGW)
     # TODO: Do this for all executables, not just citra_meta
     # TODO: Don't hardcode MXE directory?
