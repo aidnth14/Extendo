@@ -450,12 +450,12 @@ if (APPLE)
     if (NOT IOS)
         # Umbrella framework for everything GUI-related
         find_library(COCOA_LIBRARY Cocoa REQUIRED)
+        # IOKit provides the power-source API used to read the host battery level for the home
+        # screen's status readout.
+        find_library(IOKIT_LIBRARY IOKit REQUIRED)
     endif()
     find_library(AVFOUNDATION_LIBRARY AVFoundation REQUIRED)
     find_library(IOSURFACE_LIBRARY IOSurface REQUIRED)
-    # IOKit provides the power-source API used to read the host battery level for the home
-    # screen's status readout.
-    find_library(IOKIT_LIBRARY IOKit REQUIRED)
     set(PLATFORM_LIBRARIES ${COCOA_LIBRARY} ${AVFOUNDATION_LIBRARY} ${IOSURFACE_LIBRARY}
                            ${IOKIT_LIBRARY})
 
