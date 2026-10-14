@@ -272,6 +272,7 @@ private slots:
     void OnEscapePressed();
     void OnQuickSettings();
     void ShowConfigureOverlay(int initial_tab, bool enable_web_config);
+    void ShowProfileOverlay();
     void RepositionSettingsOverlay();
     void RepositionHomeButton();
     /// Recolours the floating in-game Home/Controller buttons for the active theme.

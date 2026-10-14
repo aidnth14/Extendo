@@ -586,11 +586,7 @@ void GMainWindow::InitializeWidgets() {
     connect(home_screen, &HomeScreenWidget::AddDirectory, this,
             &GMainWindow::OnGameListAddDirectory);
     connect(home_screen, &HomeScreenWidget::OpenSettings, this, &GMainWindow::OnQuickSettings);
-    // Profile opens the System page (console username, birthday, region), not Graphics — which
-    // is where the generic quick-settings entry point lands.
-    connect(home_screen, &HomeScreenWidget::OpenProfile, this, [this] {
-        ShowConfigureOverlay(1, !multiplayer_state->IsHostingPublicRoom()); // System tab
-    });
+    connect(home_screen, &HomeScreenWidget::OpenProfile, this, &GMainWindow::ShowProfileOverlay);
     connect(home_screen, &HomeScreenWidget::PowerOff, this, &QMainWindow::close);
     connect(home_screen, &HomeScreenWidget::BackgroundImageChanged, this,
             [this] { config->Save(); });
@@ -3096,7 +3092,7 @@ void GMainWindow::OnLoadState() {
 
 void GMainWindow::OnEscapePressed() {
     if (settings_overlay) {
-        if (auto* dialog = settings_overlay->findChild<ConfigureDialog*>()) {
+        if (auto* dialog = settings_overlay->findChild<QDialog*>()) {
             dialog->reject();
         }
         return;
@@ -3131,6 +3127,26 @@ void GMainWindow::OnConfigure() {
 
 void GMainWindow::OnQuickSettings() {
     ShowConfigureOverlay(5, !multiplayer_state->IsHostingPublicRoom()); // Graphics tab
+}
+
+// Action button prompts: a small colored circular glyph (B/A) before the label,
+// replacing the generic rectangular Cancel/OK buttons.
+static QIcon MakeActionBadge(const QString& letter, const QColor& color) {
+    constexpr int BadgeSize = 22;
+    QPixmap pixmap(BadgeSize, BadgeSize);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    painter.drawEllipse(0, 0, BadgeSize, BadgeSize);
+    QFont font = painter.font();
+    font.setBold(true);
+    font.setPointSize(11);
+    painter.setFont(font);
+    painter.setPen(Qt::white);
+    painter.drawText(QRect(0, 0, BadgeSize, BadgeSize), Qt::AlignCenter, letter);
+    return QIcon(pixmap);
 }
 
 // Settings used to be a separate modal QDialog (QDialog::exec()). To make it feel like part of
@@ -3271,34 +3287,14 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
         }
     }
 
-    // Action button prompts: a small colored circular glyph (B/A) before the label,
-    // replacing the generic rectangular Cancel/OK buttons.
-    auto make_action_badge = [](const QString& letter, const QColor& color) {
-        constexpr int BadgeSize = 22;
-        QPixmap pixmap(BadgeSize, BadgeSize);
-        pixmap.fill(Qt::transparent);
-        QPainter painter(&pixmap);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(color);
-        painter.drawEllipse(0, 0, BadgeSize, BadgeSize);
-        QFont font = painter.font();
-        font.setBold(true);
-        font.setPointSize(11);
-        painter.setFont(font);
-        painter.setPen(Qt::white);
-        painter.drawText(QRect(0, 0, BadgeSize, BadgeSize), Qt::AlignCenter, letter);
-        return QIcon(pixmap);
-    };
     if (auto* button_box = dialog->findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"))) {
         if (auto* cancel_button = button_box->button(QDialogButtonBox::Cancel)) {
             cancel_button->setText(tr("Back"));
-            cancel_button->setIcon(
-                make_action_badge(QStringLiteral("B"), QColor(0xe0, 0x3c, 0x3c)));
+            cancel_button->setIcon(MakeActionBadge(QStringLiteral("B"), QColor(0xe0, 0x3c, 0x3c)));
             cancel_button->setIconSize(QSize(22, 22));
         }
         if (auto* ok_button = button_box->button(QDialogButtonBox::Ok)) {
-            ok_button->setIcon(make_action_badge(QStringLiteral("A"), QColor(0x3c, 0x8c, 0xe0)));
+            ok_button->setIcon(MakeActionBadge(QStringLiteral("A"), QColor(0x3c, 0x8c, 0xe0)));
             ok_button->setIconSize(QSize(22, 22));
         }
     }
@@ -3477,6 +3473,117 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
                 settings_overlay = nullptr;
                 settings_card = nullptr;
             });
+}
+
+void GMainWindow::ShowProfileOverlay() {
+    if (settings_overlay) {
+        settings_overlay->raise();
+        return;
+    }
+
+    const bool white = UISettings::values.theme == QStringLiteral("white");
+    const QColor base = white ? QColor(0xff, 0xff, 0xff) : QColor(0x16, 0x18, 0x1d);
+    const QColor toward = white ? QColor(0, 0, 0) : QColor(0xff, 0xff, 0xff);
+    const auto tint = [&base, &toward](qreal amount) {
+        return QColor(qRound(base.red() + (toward.red() - base.red()) * amount),
+                      qRound(base.green() + (toward.green() - base.green()) * amount),
+                      qRound(base.blue() + (toward.blue() - base.blue()) * amount))
+            .name();
+    };
+
+    const QString bg = base.name();
+    const QString text = tint(0.92);
+    const QString hover = tint(0.07);
+    const QString border = tint(0.13);
+
+    auto* dialog = new QDialog();
+    dialog->setObjectName(QStringLiteral("profileDialog"));
+    dialog->setWindowFlags(Qt::Widget);
+
+    auto* dialog_layout = new QVBoxLayout(dialog);
+    dialog_layout->setContentsMargins(24, 24, 24, 16);
+    dialog_layout->addStretch();
+
+    auto* button_box =
+        new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, dialog);
+    button_box->setObjectName(QStringLiteral("buttonBox"));
+    dialog_layout->addWidget(button_box);
+
+    if (auto* cancel_button = button_box->button(QDialogButtonBox::Cancel)) {
+        cancel_button->setText(tr("Cancel"));
+        cancel_button->setIcon(MakeActionBadge(QStringLiteral("B"), QColor(0xe0, 0x3c, 0x3c)));
+        cancel_button->setIconSize(QSize(22, 22));
+    }
+    if (auto* ok_button = button_box->button(QDialogButtonBox::Ok)) {
+        ok_button->setText(tr("OK"));
+        ok_button->setIcon(MakeActionBadge(QStringLiteral("A"), QColor(0x3c, 0x8c, 0xe0)));
+        ok_button->setIconSize(QSize(22, 22));
+    }
+
+    QString qss;
+    qss += QStringLiteral("* { font-family: 'Roboto', sans-serif; }");
+    qss += QStringLiteral("QDialog#profileDialog { background: transparent; border: none; }");
+    qss += QStringLiteral("QDialogButtonBox QPushButton { background: transparent; border: none;"
+                          " border-radius: 6px; color: %1; padding: 4px 10px; font-weight: 600; }")
+               .arg(text);
+    qss += QStringLiteral("QDialogButtonBox QPushButton:focus { border: none; }");
+    qss += QStringLiteral("QDialogButtonBox QPushButton:default { background: transparent;"
+                          " color: %1; }")
+               .arg(text);
+    qss += QStringLiteral("QDialogButtonBox QPushButton:default:hover { background-color: %1; }")
+               .arg(hover);
+    qss +=
+        QStringLiteral("QDialogButtonBox QPushButton:hover { background-color: %1; }").arg(hover);
+    qss += QStringLiteral("QDialogButtonBox { border: none; padding-top: 10px; }");
+    dialog->setStyleSheet(qss);
+
+    settings_overlay = new QWidget(ui->centralwidget);
+    settings_overlay->setObjectName(QStringLiteral("settingsOverlayBackdrop"));
+    settings_overlay->setStyleSheet(
+        QStringLiteral("#settingsOverlayBackdrop { background-color: rgba(0, 0, 0, 150); }"));
+    settings_overlay->setAttribute(Qt::WA_StyledBackground, true);
+    settings_overlay->installEventFilter(this);
+
+    settings_card = new QWidget(settings_overlay);
+    settings_card->setObjectName(QStringLiteral("settingsOverlayCard"));
+    settings_card->setStyleSheet(
+        QStringLiteral("#settingsOverlayCard { background-color: %1; border: 1px solid %2;"
+                       " border-radius: 20px; }")
+            .arg(bg, border));
+    settings_card->setAttribute(Qt::WA_StyledBackground, true);
+    auto* card_layout = new QVBoxLayout(settings_card);
+    card_layout->setContentsMargins(1, 1, 1, 1);
+    card_layout->addWidget(dialog);
+
+    RepositionSettingsOverlay();
+    settings_overlay->show();
+    settings_overlay->raise();
+    dialog->setFocus();
+
+    {
+        const QRect target = settings_card->geometry();
+        QRect from = target;
+        from.setSize(target.size() * 0.96);
+        from.moveCenter(target.center() + QPoint(0, 14));
+        auto* rise = new QPropertyAnimation(settings_card, "geometry", settings_card);
+        rise->setDuration(190);
+        rise->setStartValue(from);
+        rise->setEndValue(target);
+        rise->setEasingCurve(QEasingCurve::OutCubic);
+        rise->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+
+    const auto close_overlay = [this] {
+        if (settings_overlay) {
+            settings_overlay->deleteLater();
+            settings_overlay = nullptr;
+            settings_card = nullptr;
+        }
+    };
+    connect(button_box, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
+    connect(button_box, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(dialog, &QDialog::accepted, this, close_overlay);
+    connect(dialog, &QDialog::rejected, this, close_overlay);
 }
 
 void GMainWindow::RepositionSettingsOverlay() {
@@ -4483,7 +4590,7 @@ bool GMainWindow::eventFilter(QObject* watched, QEvent* event) {
         auto* mouse_event = static_cast<QMouseEvent*>(event);
         if (settings_card && !settings_card->geometry().contains(mouse_event->pos())) {
             // Clicked the dimmed backdrop, not the card itself: treat like Cancel.
-            if (auto* dialog = settings_overlay->findChild<ConfigureDialog*>()) {
+            if (auto* dialog = settings_overlay->findChild<QDialog*>()) {
                 dialog->reject();
             }
         }
