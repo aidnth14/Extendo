@@ -268,6 +268,81 @@ static int GetMajorVersion(const std::string& version) {
 }
 #endif
 
+class OverlayHomeButton : public QToolButton {
+public:
+    explicit OverlayHomeButton(QWidget* parent = nullptr) : QToolButton(parent) {
+        setAttribute(Qt::WA_TranslucentBackground, true);
+        setAttribute(Qt::WA_NoSystemBackground, true);
+        setAutoFillBackground(false);
+        setAttribute(Qt::WA_Hover, true);
+        setStyleSheet(QStringLiteral("QToolButton { background: transparent; border: none; }"));
+        setMask(QRegion(0, 0, 48, 48, QRegion::Ellipse));
+    }
+
+    void SetTheme(bool is_white) {
+        if (white == is_white) {
+            return;
+        }
+        white = is_white;
+        update();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QToolButton::resizeEvent(event);
+        setMask(QRegion(rect(), QRegion::Ellipse));
+    }
+
+    void enterEvent(QEnterEvent* event) override {
+        QToolButton::enterEvent(event);
+        update();
+    }
+
+    void leaveEvent(QEvent* event) override {
+        QToolButton::leaveEvent(event);
+        update();
+    }
+
+    bool hitButton(const QPoint& pos) const override {
+        const QPoint center = rect().center();
+        const int dx = pos.x() - center.x();
+        const int dy = pos.y() - center.y();
+        const int radius = width() / 2;
+        return (dx * dx + dy * dy) <= (radius * radius);
+    }
+
+    void paintEvent(QPaintEvent* event) override {
+        Q_UNUSED(event);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+
+        const QColor bg = white ? (isDown() ? QColor(0xd0, 0xd0, 0xd0, 240)
+                                            : (underMouse() ? QColor(0xe6, 0xe6, 0xe6, 240)
+                                                            : QColor(0xff, 0xff, 0xff, 230)))
+                                : (isDown() ? QColor(0x24, 0x24, 0x28, 230)
+                                            : (underMouse() ? QColor(0x3a, 0x3a, 0x42, 230)
+                                                            : QColor(0x1e, 0x1e, 0x22, 210)));
+        const QColor border = white ? QColor(0xcc, 0xcc, 0xcc) : QColor(0x2c, 0x2c, 0x32);
+
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        p.setPen(QPen(border, 1.0));
+        p.setBrush(bg);
+        p.drawEllipse(r);
+
+        const QIcon ic = icon();
+        if (!ic.isNull()) {
+            const QSize isz = iconSize();
+            const QRect icon_rect((width() - isz.width()) / 2, (height() - isz.height()) / 2,
+                                  isz.width(), isz.height());
+            ic.paint(&p, icon_rect);
+        }
+    }
+
+private:
+    bool white = false;
+};
+
 GMainWindow::GMainWindow(Core::System& system_)
     : ui{std::make_unique<Ui::MainWindow>()}, system{system_}, movie{system.Movie()},
       user_data_migrator{this}, config{std::make_unique<QtConfig>()}, emu_thread{nullptr} {
@@ -596,7 +671,7 @@ void GMainWindow::InitializeWidgets() {
     // Floating Home button, shown only while a game is running (the home screen itself already
     // has its own navigation) — lets you get back to the game shelf without hunting for the
     // menu bar, matching the physical Home button.
-    home_button = new QToolButton(ui->centralwidget);
+    home_button = new OverlayHomeButton(ui->centralwidget);
     // No tooltip: these two buttons are only ever shown on top of the running game's
     // Vulkan/MoltenVK surface, where native QToolTip popups render corrupted.
     home_button->setFixedSize(48, 48);
@@ -3635,17 +3710,9 @@ void GMainWindow::ApplyOverlayButtonTheme() {
     }
     home_button->setIcon(QIcon(home_icon));
 
-    // A solid disc rather than a bare glyph: this button sits on top of arbitrary game output,
-    // whose brightness has nothing to do with the chosen theme, so a themed glyph alone can end
-    // up invisible (a black icon on a dark title screen). The disc guarantees contrast.
-    home_button->setStyleSheet(
-        QStringLiteral("QToolButton { background-color: %1; border: 1px solid %2;"
-                       " border-radius: 24px; }"
-                       "QToolButton:hover { background-color: %3; }")
-            .arg(white ? QStringLiteral("rgba(255, 255, 255, 230)")
-                       : QStringLiteral("rgba(30, 30, 34, 210)"),
-                 white ? QStringLiteral("#cccccc") : QStringLiteral("#2c2c32"),
-                 white ? QStringLiteral("#e6e6e6") : QStringLiteral("#3a3a42")));
+    if (auto* overlay_btn = dynamic_cast<OverlayHomeButton*>(home_button)) {
+        overlay_btn->SetTheme(white);
+    }
 }
 
 void GMainWindow::RepositionHomeButton() {
