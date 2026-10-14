@@ -18,7 +18,11 @@ class QToolButton;
 class QFileSystemWatcher;
 class QBoxLayout;
 class QPropertyAnimation;
+class QMovie;
+class QShowEvent;
+class QHideEvent;
 class TileHoverDelegate;
+class TileShelfWidget;
 
 /// Horizontal console-style tile shelf shown in place of the tree-view game list.
 /// Reads from the same QStandardItemModel that GameList populates, so it stays in sync with
@@ -50,12 +54,15 @@ protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
     void SetupUi();
     void OnTileActivated(QListWidgetItem* item);
     void OnTileContextMenu(const QPoint& pos);
     void OnChooseWallpaper();
+    void OnBackgroundMovieFrame();
     void UpdateClock();
     /// Re-reads the host battery and repaints the status icon.
     void UpdateBattery();
@@ -76,7 +83,7 @@ private:
     QStandardItemModel* source_model;
     int tile_icon_size = 96; // adjusted live to the window width; see UpdateTileIconSizeForWidth
     QMap<QString, QString> custom_covers; // game full path -> custom cover image path
-    QListWidget* tile_list = nullptr;
+    TileShelfWidget* tile_list = nullptr;
     TileHoverDelegate* tile_hover_delegate = nullptr;
     QLabel* clock_label = nullptr;
     QLabel* title_label = nullptr;
@@ -88,6 +95,8 @@ private:
     QTimer* clock_timer = nullptr;
     QPixmap background_pixmap; // untouched source
     QPixmap background_scaled; // cached, scaled to the widget once per resize
+    QMovie* background_movie = nullptr;
+    QMap<QString, QMovie*> cover_movies;
     QFileSystemWatcher* style_watcher = nullptr;
     // Auto-picked (white on a dark background, black on a bright one) so home screen text
     // stays legible regardless of the user's chosen wallpaper.

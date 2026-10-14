@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the misc/licenses/gplv2.txt file included.
 
+#include <functional>
 #include <utility>
 #include <vector>
 #include <QApplication>
@@ -15,17 +16,21 @@
 #include <QFileSystemWatcher>
 #include <QFont>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QImage>
+#include <QImageReader>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QMovie>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSettings>
+#include <QShowEvent>
 #include <QStandardItemModel>
 #include <QStyledItemDelegate>
 #include <QTextStream>
@@ -221,6 +226,26 @@ qreal RegionLuminance(const QPixmap& pixmap, const QRectF& region) {
 QPixmap RoundedPixmap(const QPixmap& source, int size, int radius, qreal dpr = 1.0) {
     QPixmap scaled =
         ScaleAndSharpen(source, QSize(size, size), Qt::KeepAspectRatioByExpanding, dpr);
+    QPixmap rounded(qRound(size * dpr), qRound(size * dpr));
+    rounded.setDevicePixelRatio(dpr);
+    rounded.fill(Qt::transparent);
+
+    QPainter painter(&rounded);
+    painter.setRenderHint(QPainter::Antialiasing);
+    QPainterPath path;
+    path.addRoundedRect(0, 0, size, size, radius, radius);
+    painter.setClipPath(path);
+    painter.drawPixmap(
+        QPointF((size - scaled.width() / dpr) / 2.0, (size - scaled.height() / dpr) / 2.0), scaled);
+    return rounded;
+}
+
+QPixmap RoundedLivePixmap(const QPixmap& source, int size, int radius, qreal dpr = 1.0) {
+    const QSize physical_size(qRound(size * dpr), qRound(size * dpr));
+    QPixmap scaled =
+        source.scaled(physical_size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    scaled.setDevicePixelRatio(dpr);
+
     QPixmap rounded(qRound(size * dpr), qRound(size * dpr));
     rounded.setDevicePixelRatio(dpr);
     rounded.fill(Qt::transparent);
@@ -554,6 +579,43 @@ QString HomeIconPath(const QString& file_name) {
 
 } // namespace
 
+class TileShelfWidget : public QListWidget {
+public:
+    explicit TileShelfWidget(QWidget* parent = nullptr) : QListWidget(parent) {}
+
+    void SetNaturalWidth(int w) {
+        if (natural_width == w) {
+            return;
+        }
+        natural_width = w;
+        updateGeometry();
+    }
+
+    void SetCellWidth(int w) {
+        if (cell_width == w) {
+            return;
+        }
+        cell_width = w;
+        updateGeometry();
+    }
+
+    QSize sizeHint() const override {
+        const QSize base = QListWidget::sizeHint();
+        return QSize(natural_width > 0 ? natural_width : base.width(),
+                     maximumHeight() < QWIDGETSIZE_MAX ? maximumHeight() : base.height());
+    }
+
+    QSize minimumSizeHint() const override {
+        const QSize base = QListWidget::minimumSizeHint();
+        const int min_w = (cell_width > 0) ? qMin(natural_width, cell_width) : 0;
+        return QSize(min_w, minimumHeight() > 0 ? minimumHeight() : base.height());
+    }
+
+private:
+    int natural_width = 0;
+    int cell_width = 0;
+};
+
 // QSS has no transition/animation support, so a smooth per-tile hover effect (gentle scale-up +
 // glow) needs an actual item delegate driving a QVariantAnimation and repainting on each tick.
 // Hover enter/leave is tracked via a viewport event filter installed by the owning widget.
@@ -577,6 +639,11 @@ public:
     /// Mirrors HomeScreenWidget::AddDirectoryRole (private there, needed here to tell the
     /// trailing "+" tile apart from real games so it can skip the hover border).
     static constexpr int AddTileRole = Qt::UserRole + 100;
+    static constexpr int FullPathRole = Qt::UserRole + 101;
+
+    void SetLiveCoverProvider(std::function<QPixmap(const QString&)> provider) {
+        live_cover_provider = std::move(provider);
+    }
 
     explicit TileHoverDelegate(QListWidget* view) : QStyledItemDelegate(view), tile_list(view) {
         animation.setDuration(140);
@@ -669,11 +736,20 @@ public:
         painter->scale(scale, scale);
         painter->translate(-icon_rect.center());
 
-        // QListWidgetItem stores its icon as a QIcon, not a QPixmap — asking the QVariant for
-        // a QPixmap directly silently yields a null one (no implicit QIcon->QPixmap converter).
-        const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
-        if (!icon.isNull()) {
-            painter->drawPixmap(icon_rect, icon.pixmap(icon_rect.size()));
+        // If a live animated cover is playing for this item, paint its current frame;
+        // otherwise fall back to the item's static decoration icon.
+        const QString full_path = index.data(FullPathRole).toString();
+        QPixmap live_art;
+        if (live_cover_provider && !full_path.isEmpty()) {
+            live_art = live_cover_provider(full_path);
+        }
+        if (!live_art.isNull()) {
+            painter->drawPixmap(icon_rect, live_art);
+        } else {
+            const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+            if (!icon.isNull()) {
+                painter->drawPixmap(icon_rect, icon.pixmap(icon_rect.size()));
+            }
         }
 
         painter->restore();
@@ -705,6 +781,7 @@ private:
     QVariantAnimation animation;
     qreal progress = 0.0;
     QColor text_color = Qt::white;
+    std::function<QPixmap(const QString&)> live_cover_provider;
 };
 
 // Full on-screen footprint of one tile, derived from the delegate's own layout constants so the
@@ -869,7 +946,20 @@ void HomeScreenWidget::UpdateTextColorForBackground() {
     update(); // scrim colour is derived from home_text_color
 }
 
-HomeScreenWidget::~HomeScreenWidget() = default;
+HomeScreenWidget::~HomeScreenWidget() {
+    if (background_movie) {
+        background_movie->stop();
+        delete background_movie;
+        background_movie = nullptr;
+    }
+    for (auto* movie : cover_movies) {
+        if (movie) {
+            movie->stop();
+            delete movie;
+        }
+    }
+    cover_movies.clear();
+}
 
 void HomeScreenWidget::SetupUi() {
     auto* main_layout = new QVBoxLayout(this);
@@ -929,7 +1019,7 @@ void HomeScreenWidget::SetupUi() {
     populated_v->setSpacing(10);
     populated_v->addStretch(1);
 
-    tile_list = new QListWidget(populated_container);
+    tile_list = new TileShelfWidget(populated_container);
     tile_list->setViewMode(QListWidget::IconMode);
     tile_list->setFlow(QListWidget::LeftToRight);
     tile_list->setWrapping(false);
@@ -952,6 +1042,16 @@ void HomeScreenWidget::SetupUi() {
     tile_list->setMouseTracking(true);
 
     tile_hover_delegate = new TileHoverDelegate(tile_list);
+    tile_hover_delegate->SetLiveCoverProvider([this](const QString& full_path) -> QPixmap {
+        auto it = cover_movies.find(full_path);
+        if (it != cover_movies.end() && it.value() && it.value()->isValid()) {
+            const QPixmap frame = it.value()->currentPixmap();
+            if (!frame.isNull()) {
+                return RoundedLivePixmap(frame, tile_icon_size, 3, devicePixelRatioF());
+            }
+        }
+        return QPixmap();
+    });
     tile_list->setItemDelegate(tile_hover_delegate);
     tile_list->viewport()->installEventFilter(this);
     connect(tile_list, &QListWidget::entered, this,
@@ -1088,20 +1188,25 @@ void HomeScreenWidget::ApplyPillBarPlacement() {
 }
 
 void HomeScreenWidget::ApplyAppearanceSettings() {
-    if (!UISettings::values.home_background_path.isEmpty()) {
-        const QPixmap source(UISettings::values.home_background_path);
-        if (!source.isNull()) {
-            // Pre-scale+sharpen once to a generous cap rather than on every paintEvent: the
-            // per-frame cost of a plain downscale from this cached copy is negligible, while
-            // redoing the sharpen convolution every repaint would not be.
-            // Keep the untouched source and scale straight to the display size once (see
-            // RebuildScaledBackground). The old path sharpened the photo with the cover-art
-            // kernel, downsampled it to a 1600x1000 cap, then rescaled it again on every
-            // paint — three lossy steps that produced the crunchy, haloed result. Sharpening
-            // only ever made sense for tiny icons being upscaled, never for a full photo.
-            background_pixmap = source;
+    if (background_movie) {
+        background_movie->stop();
+        delete background_movie;
+        background_movie = nullptr;
+    }
+    const QString& bg_path = UISettings::values.home_background_path;
+    if (!bg_path.isEmpty() && QFile::exists(bg_path)) {
+        auto* movie = new QMovie(bg_path, QByteArray(), this);
+        if (movie->isValid() && (movie->frameCount() > 1 || movie->frameCount() == 0)) {
+            background_movie = movie;
+            connect(background_movie, &QMovie::frameChanged, this,
+                    &HomeScreenWidget::OnBackgroundMovieFrame);
+            connect(background_movie, &QMovie::finished, background_movie, &QMovie::start);
+            background_movie->start();
+            background_pixmap = background_movie->currentPixmap();
         } else {
-            background_pixmap = QPixmap();
+            delete movie;
+            const QPixmap source(bg_path);
+            background_pixmap = source;
         }
     } else {
         background_pixmap = QPixmap();
@@ -1134,6 +1239,13 @@ void HomeScreenWidget::ApplyAppearanceSettings() {
     update();
 }
 
+void HomeScreenWidget::OnBackgroundMovieFrame() {
+    if (background_movie) {
+        background_pixmap = background_movie->currentPixmap();
+        update();
+    }
+}
+
 void HomeScreenWidget::paintEvent(QPaintEvent* event) {
     {
         // Solid theme base fill: white for the custom White theme, dark for everything else.
@@ -1142,11 +1254,22 @@ void HomeScreenWidget::paintEvent(QPaintEvent* event) {
         base_painter.fillRect(rect(),
                               IsWhiteTheme() ? QColor(0xff, 0xff, 0xff) : QColor(0x16, 0x18, 0x1d));
     }
-    if (!background_scaled.isNull()) {
+    const bool is_animated = background_movie && !background_pixmap.isNull();
+    if (is_animated || !background_scaled.isNull()) {
         QPainter painter(this);
-        const int x = qRound((width() - background_scaled.width() / devicePixelRatioF()) / 2.0);
-        const int y = qRound((height() - background_scaled.height() / devicePixelRatioF()) / 2.0);
-        painter.drawPixmap(x, y, background_scaled);
+        if (is_animated) {
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            const QSize img_size = background_pixmap.size();
+            const QSize scaled = img_size.scaled(size(), Qt::KeepAspectRatioByExpanding);
+            const int x = (width() - scaled.width()) / 2;
+            const int y = (height() - scaled.height()) / 2;
+            painter.drawPixmap(QRect(x, y, scaled.width(), scaled.height()), background_pixmap);
+        } else {
+            const int x = qRound((width() - background_scaled.width() / devicePixelRatioF()) / 2.0);
+            const int y =
+                qRound((height() - background_scaled.height() / devicePixelRatioF()) / 2.0);
+            painter.drawPixmap(x, y, background_scaled);
+        }
 
         // Contrast scrims. Region sampling alone can't rescue a strip that is genuinely
         // half-bright and half-dark, so the two bands that carry text get a soft gradient in
@@ -1175,6 +1298,19 @@ void HomeScreenWidget::paintEvent(QPaintEvent* event) {
 // Scales the untouched wallpaper source straight to the current widget size, once, and
 // re-derives the per-region foreground colours from that scaled copy.
 void HomeScreenWidget::RebuildScaledBackground() {
+    if (background_movie && background_movie->isValid()) {
+        background_pixmap = background_movie->currentPixmap();
+        if (!background_pixmap.isNull()) {
+            const qreal dpr = devicePixelRatioF();
+            const QSize target = size() * dpr;
+            background_scaled = background_pixmap.scaled(target, Qt::KeepAspectRatioByExpanding,
+                                                         Qt::SmoothTransformation);
+            background_scaled.setDevicePixelRatio(dpr);
+            UpdateTextColorForBackground();
+        }
+        return;
+    }
+
     if (background_pixmap.isNull() || width() <= 0 || height() <= 0) {
         background_scaled = QPixmap();
         return;
@@ -1204,6 +1340,30 @@ void HomeScreenWidget::resizeEvent(QResizeEvent* event) {
     UpdateLegendBar();
     UpdateTileIconSizeForWidth(width());
     UpdateTileListWidth();
+}
+
+void HomeScreenWidget::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    if (background_movie && background_movie->state() == QMovie::Paused) {
+        background_movie->setPaused(false);
+    }
+    for (auto* movie : cover_movies) {
+        if (movie && movie->state() == QMovie::Paused) {
+            movie->setPaused(false);
+        }
+    }
+}
+
+void HomeScreenWidget::hideEvent(QHideEvent* event) {
+    QWidget::hideEvent(event);
+    if (background_movie && background_movie->state() == QMovie::Running) {
+        background_movie->setPaused(true);
+    }
+    for (auto* movie : cover_movies) {
+        if (movie && movie->state() == QMovie::Running) {
+            movie->setPaused(true);
+        }
+    }
 }
 
 bool HomeScreenWidget::eventFilter(QObject* watched, QEvent* event) {
@@ -1279,10 +1439,14 @@ void HomeScreenWidget::UpdateTileIconSizeForWidth(int available_width) {
         return;
     }
     const int usable = qMax(available_width - 32, MinTileIconSize);
-    // Subtract the per-tile chrome (hover slack + spacing) so the icon size that comes out is
-    // what actually fits once the full cell footprint is accounted for.
-    int candidate = usable / count - TileSpacing * 2 - TileHoverDelegate::HoverPadding * 2;
-    candidate = qBound(MinTileIconSize, candidate, MaxTileIconSize);
+    int candidate = DefaultTileIconSize;
+    const int natural_at_default = count * TileCellWidth(DefaultTileIconSize);
+    if (natural_at_default < usable) {
+        // If all tiles naturally fit within the available width with room to spare,
+        // scale them up proportionally up to MaxTileIconSize.
+        candidate = usable / count - TileSpacing * 2 - TileHoverDelegate::HoverPadding * 2;
+        candidate = qBound(DefaultTileIconSize, candidate, MaxTileIconSize);
+    }
     if (candidate == tile_icon_size) {
         return;
     }
@@ -1295,9 +1459,12 @@ void HomeScreenWidget::UpdateTileIconSizeForWidth(int available_width) {
 
 void HomeScreenWidget::UpdateTileListWidth() {
     const int count = tile_list->count();
-    const int natural_width = count * TileCellWidth(tile_icon_size);
-    const int max_width = qMax(width() - 32, TileCellWidth(tile_icon_size));
-    tile_list->setFixedWidth(qMin(natural_width, max_width));
+    const int cell_width = TileCellWidth(tile_icon_size);
+    const int natural_width = count * cell_width;
+    tile_list->SetCellWidth(cell_width);
+    tile_list->SetNaturalWidth(natural_width);
+    tile_list->setMaximumWidth(natural_width);
+    tile_list->setMinimumWidth(qMin(natural_width, cell_width));
 }
 
 namespace {
@@ -1327,6 +1494,13 @@ void HomeScreenWidget::Refresh() {
     if (tile_hover_delegate) {
         tile_hover_delegate->SetHoveredIndex(QModelIndex());
     }
+    for (auto* movie : cover_movies) {
+        if (movie) {
+            movie->stop();
+            delete movie;
+        }
+    }
+    cover_movies.clear();
     tile_list->clear();
 
     std::vector<QStandardItem*> game_items;
@@ -1343,7 +1517,22 @@ void HomeScreenWidget::Refresh() {
         QPixmap icon;
         const auto cover_it = custom_covers.constFind(full_path);
         if (cover_it != custom_covers.constEnd()) {
-            icon = QPixmap(cover_it.value());
+            const QString& cover_path = cover_it.value();
+            auto* movie = new QMovie(cover_path, QByteArray(), this);
+            if (movie->isValid() && (movie->frameCount() > 1 || movie->frameCount() == 0)) {
+                connect(movie, &QMovie::frameChanged, this, [this](int) {
+                    if (tile_list) {
+                        tile_list->viewport()->update();
+                    }
+                });
+                connect(movie, &QMovie::finished, movie, &QMovie::start);
+                movie->start();
+                cover_movies.insert(full_path, movie);
+                icon = movie->currentPixmap();
+            } else {
+                delete movie;
+                icon = QPixmap(cover_path);
+            }
         }
         if (icon.isNull()) {
             icon = item->data(Qt::DecorationRole).value<QPixmap>();
