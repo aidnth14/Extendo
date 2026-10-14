@@ -3159,21 +3159,33 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
     // Fully custom White/Dark theming (no native palette): pick the color set from the current
     // theme, then build the whole settings-panel stylesheet from it. White = white surfaces,
     // black text/accents; otherwise the dark set.
+    // Taste rule 2: one hue owns the screen. Every surface below is the SAME base colour
+    // mixed toward the foreground by a fixed amount, rather than a family of hand-picked
+    // greys — which is what produced mismatched slabs sitting next to each other before.
     const bool white = UISettings::values.theme == QStringLiteral("white");
-    const QString bg = white ? QStringLiteral("#ffffff") : QStringLiteral("#18181c");
-    const QString text = white ? QStringLiteral("#000000") : QStringLiteral("#e8e8ec");
-    const QString listtext = white ? QStringLiteral("#222222") : QStringLiteral("#c8c8ce");
-    const QString selbg = white ? QStringLiteral("#000000") : QStringLiteral("#2f2f37");
-    const QString seltext = white ? QStringLiteral("#ffffff") : QStringLiteral("#ffffff");
-    const QString hover = white ? QStringLiteral("#ebebeb") : QStringLiteral("#26262c");
-    const QString btn = white ? QStringLiteral("#ededed") : QStringLiteral("#2a2a30");
-    const QString btnhover = white ? QStringLiteral("#e0e0e0") : QStringLiteral("#34343c");
-    const QString btnpress = white ? QStringLiteral("#d5d5d5") : QStringLiteral("#222228");
+    const QColor base = white ? QColor(0xff, 0xff, 0xff) : QColor(0x16, 0x18, 0x1d);
+    const QColor toward = white ? QColor(0, 0, 0) : QColor(0xff, 0xff, 0xff);
+    const auto tint = [&base, &toward](qreal amount) {
+        return QColor(qRound(base.red() + (toward.red() - base.red()) * amount),
+                      qRound(base.green() + (toward.green() - base.green()) * amount),
+                      qRound(base.blue() + (toward.blue() - base.blue()) * amount))
+            .name();
+    };
+
+    const QString bg = base.name();
+    const QString text = tint(0.92);
+    const QString listtext = tint(0.74);
+    const QString selbg = tint(white ? 1.0 : 0.17);
+    const QString seltext = white ? QStringLiteral("#ffffff") : tint(1.0);
+    const QString hover = tint(0.07);
+    const QString btn = tint(0.11);
+    const QString btnhover = tint(0.16);
+    const QString btnpress = tint(0.05);
     const QString accent = white ? QStringLiteral("#000000") : QStringLiteral("#0a84ff");
     const QString accenth = white ? QStringLiteral("#333333") : QStringLiteral("#2f95ff");
-    const QString field = white ? QStringLiteral("#f2f2f2") : QStringLiteral("#1c1c20");
-    const QString border = white ? QStringLiteral("#cccccc") : QStringLiteral("#2c2c32");
-    const QString groove = white ? QStringLiteral("#d5d5d5") : QStringLiteral("#2c2c32");
+    const QString field = tint(0.04);
+    const QString border = tint(0.13);
+    const QString groove = tint(0.13);
     const QString handle = white ? QStringLiteral("#000000") : QStringLiteral("#ffffff");
     const QString focus = white ? QStringLiteral("#000000") : QStringLiteral("#4dd9e8");
 
@@ -4824,14 +4836,15 @@ static QPalette BuildAppPalette(bool white) {
         p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0xa0, 0xa0, 0xa0));
         p.setColor(QPalette::Disabled, QPalette::WindowText, QColor(0xa0, 0xa0, 0xa0));
     } else {
-        p.setColor(QPalette::Window, QColor(0x18, 0x18, 0x1c));
+        // Taste rule 2: all of these are the one base hue at increasing tints, not separate greys.
+        p.setColor(QPalette::Window, QColor(0x16, 0x18, 0x1d));
         p.setColor(QPalette::WindowText, Qt::white);
-        p.setColor(QPalette::Base, QColor(0x1c, 0x1c, 0x20));
-        p.setColor(QPalette::AlternateBase, QColor(0x24, 0x24, 0x2a));
-        p.setColor(QPalette::ToolTipBase, QColor(0x24, 0x24, 0x2a));
+        p.setColor(QPalette::Base, QColor(0x1b, 0x1d, 0x22));
+        p.setColor(QPalette::AlternateBase, QColor(0x22, 0x24, 0x29));
+        p.setColor(QPalette::ToolTipBase, QColor(0x22, 0x24, 0x29));
         p.setColor(QPalette::ToolTipText, Qt::white);
         p.setColor(QPalette::Text, Qt::white);
-        p.setColor(QPalette::Button, QColor(0x2a, 0x2a, 0x30));
+        p.setColor(QPalette::Button, QColor(0x27, 0x29, 0x2f));
         p.setColor(QPalette::ButtonText, Qt::white);
         p.setColor(QPalette::BrightText, Qt::red);
         p.setColor(QPalette::Link, QColor(0x0a, 0x84, 0xff));

@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the misc/licenses/gplv2.txt file included.
 
+#include <utility>
 #include <vector>
 #include <QApplication>
 #include <QCoreApplication>
@@ -298,6 +299,29 @@ QPixmap RenderBatteryIcon(const BatteryState& state, const QColor& color, qreal 
             QRectF(body.left() + inset, body.top() + inset, filled, body.height() - inset * 2), 1.5,
             1.5);
     }
+    return pixmap;
+}
+
+// Taste rule 4: the docked legend's letter glyphs. Filled circle, letter knocked out in the
+// surface colour — monochrome and inheriting the foreground, per rule 5.
+QPixmap RenderGlyphBadge(const QString& letter, const QColor& fg, const QColor& bg, qreal dpr) {
+    constexpr int Size = 19;
+    QPixmap pixmap(qRound(Size * dpr), qRound(Size * dpr));
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(fg);
+    painter.drawEllipse(QRectF(0, 0, Size, Size));
+
+    QFont font = painter.font();
+    font.setBold(true);
+    font.setPointSizeF(Size * 0.52);
+    painter.setFont(font);
+    painter.setPen(bg);
+    painter.drawText(QRectF(0, 0, Size, Size), Qt::AlignCenter, letter);
     return pixmap;
 }
 
@@ -729,7 +753,8 @@ void HomeScreenWidget::UpdateTextColorForBackground() {
         tile_hover_delegate->SetTextColor(home_text_color);
     }
     ApplyCombinedStylesheet();
-    UpdateBattery(); // the icon is painted, so it needs re-rendering in the new colour
+    UpdateBattery();     // the icon is painted, so it needs re-rendering in the new colour
+    UpdateLegendBar();   // ditto for the legend's glyph badges
     // The "+" add-directory tile is a painted pixmap, not QSS, so repaint it with the new color.
     // Guarded by the early-return above, this can't loop (Refresh doesn't change the color).
     if (tile_list) {
@@ -876,7 +901,49 @@ void HomeScreenWidget::SetupUi() {
         pill_layout->addWidget(button, 0, Qt::AlignCenter);
     }
 
+    // Taste rule 4: a persistent, docked button legend. It is the primary affordance on this
+    // screen, which is why scrollbars and tooltips are absent elsewhere in this UI.
+    legend_bar = new QWidget(this);
+    legend_bar->setObjectName(QStringLiteral("legendBar"));
+    auto* legend_layout = new QHBoxLayout(legend_bar);
+    legend_layout->setContentsMargins(0, 0, 0, 0);
+    legend_layout->setSpacing(6);
+    for (const auto& entry : {std::pair<const char*, const char*>{"Y", QT_TR_NOOP("Options")},
+                              std::pair<const char*, const char*>{"A", QT_TR_NOOP("Open")}}) {
+        auto* glyph = new QLabel(legend_bar);
+        glyph->setObjectName(QStringLiteral("legendGlyph"));
+        glyph->setProperty("letter", QString::fromUtf8(entry.first));
+        auto* label = new QLabel(tr(entry.second), legend_bar);
+        label->setObjectName(QStringLiteral("legendText"));
+        legend_layout->addWidget(glyph);
+        legend_layout->addWidget(label);
+        legend_layout->addSpacing(10);
+    }
+
     ApplyPillBarPlacement();
+    UpdateLegendBar();
+}
+
+// Repaints the legend glyphs in the current foreground colour and re-docks the bar.
+void HomeScreenWidget::UpdateLegendBar() {
+    if (!legend_bar) {
+        return;
+    }
+    const QColor surface = IsWhiteTheme() ? QColor(0xff, 0xff, 0xff) : QColor(0x16, 0x18, 0x1d);
+    for (QLabel* glyph : legend_bar->findChildren<QLabel*>(QStringLiteral("legendGlyph"))) {
+        glyph->setPixmap(RenderGlyphBadge(glyph->property("letter").toString(), home_text_color,
+                                          surface, devicePixelRatioF()));
+    }
+    for (QLabel* label : legend_bar->findChildren<QLabel*>(QStringLiteral("legendText"))) {
+        QFont font = label->font();
+        font.setWeight(QFont::DemiBold);
+        label->setFont(font);
+    }
+    legend_bar->adjustSize();
+    constexpr int EdgeMargin = 14;
+    legend_bar->move(width() - legend_bar->width() - EdgeMargin,
+                     height() - legend_bar->height() - EdgeMargin - 4);
+    legend_bar->raise();
 }
 
 // Positions the dock by hand (it isn't in any layout) and reserves room for it in the content
@@ -954,6 +1021,7 @@ void HomeScreenWidget::ApplyAppearanceSettings() {
     tile_list->setFont(font);
 
     ApplyPillBarPlacement(); // dock side is an appearance setting too
+    UpdateLegendBar();
     update();
 }
 
@@ -961,8 +1029,9 @@ void HomeScreenWidget::paintEvent(QPaintEvent* event) {
     {
         // Solid theme base fill: white for the custom White theme, dark for everything else.
         QPainter base_painter(this);
+        // Taste rule 2: same base hue the settings panel and palette are derived from.
         base_painter.fillRect(rect(), IsWhiteTheme() ? QColor(0xff, 0xff, 0xff)
-                                                     : QColor(0x18, 0x18, 0x1c));
+                                                     : QColor(0x16, 0x18, 0x1d));
     }
     if (!background_pixmap.isNull()) {
         QPainter painter(this);
@@ -978,6 +1047,7 @@ void HomeScreenWidget::paintEvent(QPaintEvent* event) {
 void HomeScreenWidget::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     ApplyPillBarPlacement(); // hand-positioned, so it has to follow the window
+    UpdateLegendBar();
     UpdateTileIconSizeForWidth(width());
     UpdateTileListWidth();
 }

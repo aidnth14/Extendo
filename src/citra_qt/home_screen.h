@@ -63,6 +63,8 @@ private:
     void UpdateTileIconSizeForWidth(int available_width);
     /// Re-docks the pill bar (bottom horizontal vs left vertical) per home_pill_position.
     void ApplyPillBarPlacement();
+    /// Repaints and re-docks the persistent A/Y button legend.
+    void UpdateLegendBar();
     void LoadCustomCovers();
     void SaveCustomCovers();
     /// Recomputes home_text_color from the current background's brightness and reapplies it.
@@ -95,6 +97,7 @@ private:
     QPropertyAnimation* scroll_animation = nullptr;
     QLabel* battery_label = nullptr;
     QLabel* battery_percent_label = nullptr;
+    QWidget* legend_bar = nullptr;
 
     static constexpr int AddDirectoryRole = Qt::UserRole + 100;
     static constexpr int FullPathRole = Qt::UserRole + 101;
