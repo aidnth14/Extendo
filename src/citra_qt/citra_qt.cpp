@@ -275,8 +275,8 @@ public:
         setAttribute(Qt::WA_NoSystemBackground, true);
         setAutoFillBackground(false);
         setAttribute(Qt::WA_Hover, true);
+        setMouseTracking(true);
         setStyleSheet(QStringLiteral("QToolButton { background: transparent; border: none; }"));
-        setMask(QRegion(0, 0, 48, 48, QRegion::Ellipse));
     }
 
     void SetTheme(bool is_white) {
@@ -288,44 +288,57 @@ public:
     }
 
 protected:
-    void resizeEvent(QResizeEvent* event) override {
-        QToolButton::resizeEvent(event);
-        setMask(QRegion(rect(), QRegion::Ellipse));
-    }
-
     void enterEvent(QEnterEvent* event) override {
         QToolButton::enterEvent(event);
-        update();
+        const bool h = hitButton(event->position().toPoint());
+        if (h != hovered) {
+            hovered = h;
+            update();
+        }
     }
 
     void leaveEvent(QEvent* event) override {
         QToolButton::leaveEvent(event);
-        update();
+        if (hovered) {
+            hovered = false;
+            update();
+        }
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        QToolButton::mouseMoveEvent(event);
+        const bool h = hitButton(event->pos());
+        if (h != hovered) {
+            hovered = h;
+            update();
+        }
     }
 
     bool hitButton(const QPoint& pos) const override {
-        const QPoint center = rect().center();
-        const int dx = pos.x() - center.x();
-        const int dy = pos.y() - center.y();
-        const int radius = width() / 2;
+        const qreal cx = width() / 2.0;
+        const qreal cy = height() / 2.0;
+        const qreal dx = pos.x() - cx;
+        const qreal dy = pos.y() - cy;
+        constexpr qreal radius = 23.5;
         return (dx * dx + dy * dy) <= (radius * radius);
     }
 
     void paintEvent(QPaintEvent* event) override {
         Q_UNUSED(event);
         QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
+        const bool is_hover = hovered && underMouse();
         const QColor bg = white ? (isDown() ? QColor(0xd0, 0xd0, 0xd0, 240)
-                                            : (underMouse() ? QColor(0xe6, 0xe6, 0xe6, 240)
-                                                            : QColor(0xff, 0xff, 0xff, 230)))
+                                            : (is_hover ? QColor(0xe6, 0xe6, 0xe6, 240)
+                                                        : QColor(0xff, 0xff, 0xff, 230)))
                                 : (isDown() ? QColor(0x24, 0x24, 0x28, 230)
-                                            : (underMouse() ? QColor(0x3a, 0x3a, 0x42, 230)
-                                                            : QColor(0x1e, 0x1e, 0x22, 210)));
+                                            : (is_hover ? QColor(0x3a, 0x3a, 0x42, 230)
+                                                        : QColor(0x1e, 0x1e, 0x22, 210)));
         const QColor border = white ? QColor(0xcc, 0xcc, 0xcc) : QColor(0x2c, 0x2c, 0x32);
 
-        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const QRectF r = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
         p.setPen(QPen(border, 1.0));
         p.setBrush(bg);
         p.drawEllipse(r);
@@ -341,6 +354,7 @@ protected:
 
 private:
     bool white = false;
+    bool hovered = false;
 };
 
 GMainWindow::GMainWindow(Core::System& system_)
@@ -678,7 +692,7 @@ void GMainWindow::InitializeWidgets() {
     home_button->setFocusPolicy(Qt::NoFocus);
     // Icon smaller than the 48px button so it sits inside the themed disc drawn by
     // ApplyOverlayButtonTheme() instead of running into its edge.
-    home_button->setIconSize(QSize(26, 26));
+    home_button->setIconSize(QSize(31, 31));
     home_button->hide();
     home_button->raise();
     connect(home_button, &QToolButton::clicked, this, &GMainWindow::OnHomeButtonClicked);
