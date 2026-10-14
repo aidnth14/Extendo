@@ -622,9 +622,9 @@ public:
     // default delegate); it's stashed in this role instead and only painted in manually, on
     // hover/select, so idle tiles show square art with no label at all.
     static constexpr int TitleRole = Qt::UserRole + 103;
-    /// Band reserved *below* the art for the hover title. The art never enters this band, so
+    /// Band reserved *above* the art for the hover title. The art never enters this band, so
     /// the label can't collide with the cover image the way a centered overlay would.
-    static constexpr int TitleStripHeight = 30;
+    static constexpr int TitleStripHeight = 56;
     /// Clear space between the title band and the top edge of the cover art.
     static constexpr int TitleGap = 6;
     /// Slack around the art inside its own cell. The hover animation scales the art up about
@@ -751,21 +751,50 @@ public:
 
         painter->restore();
 
-        // Title fades in underneath the art, inside its own reserved band.
+        // Title fades in above the art, inside its own reserved band, supporting text stacking
+        // for long game titles without truncation.
         if (emphasis > 0.0) {
             const QString title = index.data(TitleRole).toString();
             if (!title.isEmpty()) {
-                const QRect title_rect(cell.left(), cell.top(), cell.width(), TitleStripHeight);
+                const QRect title_rect(cell.left() + 4, cell.top(), cell.width() - 8,
+                                       TitleStripHeight);
                 QColor title_color = text_color;
                 title_color.setAlphaF(emphasis);
                 painter->setPen(title_color);
+
                 QFont title_font = painter->font();
-                title_font.setPointSizeF(title_font.pointSizeF() * 1.6);
                 title_font.setWeight(QFont::Bold);
+                qreal font_scale = 1.55;
+                int flags = Qt::AlignHCenter | Qt::AlignBottom | Qt::TextWordWrap;
+
+                // Adjust font scale down if needed so the stacked title fits inside title_rect
+                while (font_scale > 1.0) {
+                    title_font.setPointSizeF(painter->font().pointSizeF() * font_scale);
+                    const QFontMetrics fm(title_font);
+                    int current_flags = flags;
+                    if (fm.boundingRect(title_rect, current_flags, title).width() >
+                        title_rect.width()) {
+                        current_flags |= Qt::TextWrapAnywhere;
+                    }
+                    const QRect bound = fm.boundingRect(title_rect, current_flags, title);
+                    if (bound.height() <= title_rect.height() &&
+                        bound.width() <= title_rect.width()) {
+                        flags = current_flags;
+                        break;
+                    }
+                    font_scale -= 0.05;
+                }
+
+                title_font.setPointSizeF(painter->font().pointSizeF() * font_scale);
+                const QFontMetrics fm(title_font);
+                if (fm.boundingRect(title_rect, flags, title).width() > title_rect.width()) {
+                    flags |= Qt::TextWrapAnywhere;
+                }
                 painter->setFont(title_font);
-                const QString elided = painter->fontMetrics().elidedText(title, Qt::ElideRight,
-                                                                         title_rect.width() - 4);
-                painter->drawText(title_rect, Qt::AlignHCenter | Qt::AlignVCenter, elided);
+                painter->save();
+                painter->setClipRect(title_rect);
+                painter->drawText(title_rect, flags, title);
+                painter->restore();
             }
         }
 

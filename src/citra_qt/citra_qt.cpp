@@ -5186,16 +5186,14 @@ void GMainWindow::OnSwitchDiskResources(VideoCore::LoadCallbackStage stage, std:
 }
 
 void GMainWindow::UpdateWindowTitle() {
-    const QString full_name = QString::fromUtf8(Common::g_build_fullname);
-
     if (game_title.isEmpty()) {
-        setWindowTitle(QStringLiteral("Extendo %1").arg(full_name));
+        setWindowTitle(QStringLiteral("Extendo"));
     } else {
-        setWindowTitle(QStringLiteral("Extendo %1 | %2").arg(full_name, game_title));
-        render_window->setWindowTitle(QStringLiteral("Extendo %1 | %2 | %3")
-                                          .arg(full_name, game_title, tr("Primary Window")));
-        secondary_window->setWindowTitle(QStringLiteral("Extendo %1 | %2 | %3")
-                                             .arg(full_name, game_title, tr("Secondary Window")));
+        setWindowTitle(QStringLiteral("Extendo | %1").arg(game_title));
+        render_window->setWindowTitle(
+            QStringLiteral("Extendo | %1 | %2").arg(game_title, tr("Primary Window")));
+        secondary_window->setWindowTitle(
+            QStringLiteral("Extendo | %1 | %2").arg(game_title, tr("Secondary Window")));
     }
 }
 
