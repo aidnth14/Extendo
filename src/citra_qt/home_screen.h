@@ -67,7 +67,6 @@ private:
     /// Re-reads the host battery and repaints the status icon.
     void UpdateBattery();
     void UpdateTileListWidth();
-    void UpdateTileIconSizeForWidth(int available_width);
     /// Re-docks the pill bar (bottom horizontal vs left vertical) per home_pill_position.
     void ApplyPillBarPlacement();
     /// Repaints and re-docks the persistent A/Y button legend.
@@ -80,11 +79,16 @@ private:
     void UpdateTextColorForBackground();
     void ApplyCombinedStylesheet();
 
+    static constexpr int TileIconSize = 150;
+
     QStandardItemModel* source_model;
-    int tile_icon_size = 96; // adjusted live to the window width; see UpdateTileIconSizeForWidth
+    int tile_icon_size = TileIconSize;
     QMap<QString, QString> custom_covers; // game full path -> custom cover image path
     TileShelfWidget* tile_list = nullptr;
     TileHoverDelegate* tile_hover_delegate = nullptr;
+    bool shelf_dragging = false;
+    QPoint drag_start_pos;
+    int drag_start_scroll = 0;
     QLabel* clock_label = nullptr;
     QLabel* title_label = nullptr;
     QWidget* pill_bar = nullptr;

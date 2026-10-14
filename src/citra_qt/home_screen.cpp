@@ -56,9 +56,6 @@
 
 namespace {
 
-constexpr int DefaultTileIconSize = 96;
-constexpr int MinTileIconSize = 72;
-constexpr int MaxTileIconSize = 160;
 constexpr int TileSpacing = 12;
 constexpr int PillBarHeight = 50;
 
@@ -1338,7 +1335,6 @@ void HomeScreenWidget::resizeEvent(QResizeEvent* event) {
     RebuildScaledBackground();
     ApplyPillBarPlacement(); // hand-positioned, so it has to follow the window
     UpdateLegendBar();
-    UpdateTileIconSizeForWidth(width());
     UpdateTileListWidth();
 }
 
@@ -1367,50 +1363,75 @@ void HomeScreenWidget::hideEvent(QHideEvent* event) {
 }
 
 bool HomeScreenWidget::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == tile_list->viewport() && event->type() == QEvent::Leave) {
-        tile_hover_delegate->SetHoveredIndex(QModelIndex());
-    }
-    // Inertial horizontal scrolling. Qt's default wheel handling jumps the shelf a fixed number
-    // of items per notch, which reads as a hard snap. Instead each notch retargets an animation
-    // that eases the scrollbar across, and successive notches accumulate onto the pending
-    // target rather than restarting from wherever the animation happens to be mid-flight.
-    if (watched == tile_list->viewport() && event->type() == QEvent::Wheel) {
-        auto* wheel = static_cast<QWheelEvent*>(event);
-        QScrollBar* bar = tile_list->horizontalScrollBar();
-        if (!bar || bar->maximum() == 0) {
-            return QWidget::eventFilter(watched, event);
-        }
-        // Trackpads report fine-grained pixelDelta; mouse wheels only report angleDelta in
-        // eighths of a degree. Fall back to the vertical axis since most wheels have no
-        // horizontal one but users still expect them to scroll this shelf.
-        int delta = wheel->pixelDelta().x();
-        if (delta == 0) {
-            delta = wheel->pixelDelta().y();
-        }
-        if (delta == 0) {
-            const QPoint angle = wheel->angleDelta();
-            const int ticks = (angle.x() != 0 ? angle.x() : angle.y());
-            delta = ticks * tile_icon_size / 120; // one notch ≈ one tile
-        }
-        if (delta == 0) {
-            return QWidget::eventFilter(watched, event);
-        }
+    if (watched == tile_list->viewport()) {
+        if (event->type() == QEvent::Leave) {
+            tile_hover_delegate->SetHoveredIndex(QModelIndex());
+        } else if (event->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                shelf_dragging = false;
+                drag_start_pos = me->pos();
+                QScrollBar* bar = tile_list->horizontalScrollBar();
+                drag_start_scroll = bar ? bar->value() : 0;
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->buttons() & Qt::LeftButton) {
+                const int dx = me->pos().x() - drag_start_pos.x();
+                if (!shelf_dragging && std::abs(dx) > QApplication::startDragDistance()) {
+                    shelf_dragging = true;
+                    if (scroll_animation) {
+                        scroll_animation->stop();
+                    }
+                }
+                if (shelf_dragging) {
+                    QScrollBar* bar = tile_list->horizontalScrollBar();
+                    if (bar) {
+                        bar->setValue(drag_start_scroll - dx);
+                    }
+                    return true;
+                }
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            if (shelf_dragging) {
+                shelf_dragging = false;
+                return true;
+            }
+        } else if (event->type() == QEvent::Wheel) {
+            auto* wheel = static_cast<QWheelEvent*>(event);
+            QScrollBar* bar = tile_list->horizontalScrollBar();
+            if (!bar || bar->maximum() == 0) {
+                return QWidget::eventFilter(watched, event);
+            }
+            int delta = wheel->pixelDelta().x();
+            if (delta == 0) {
+                delta = wheel->pixelDelta().y();
+            }
+            if (delta == 0) {
+                const QPoint angle = wheel->angleDelta();
+                const int ticks = (angle.x() != 0 ? angle.x() : angle.y());
+                delta = ticks * tile_icon_size / 120; // one notch ≈ one tile
+            }
+            if (delta == 0) {
+                return QWidget::eventFilter(watched, event);
+            }
 
-        if (!scroll_animation) {
-            scroll_animation = new QPropertyAnimation(bar, "value", this);
-            scroll_animation->setEasingCurve(QEasingCurve::OutCubic);
-            scroll_animation->setDuration(260);
+            if (!scroll_animation) {
+                scroll_animation = new QPropertyAnimation(bar, "value", this);
+                scroll_animation->setEasingCurve(QEasingCurve::OutCubic);
+                scroll_animation->setDuration(260);
+            }
+            const bool running = scroll_animation->state() == QAbstractAnimation::Running;
+            const int base = running ? scroll_animation->endValue().toInt() : bar->value();
+            const int target = qBound(bar->minimum(), base - delta, bar->maximum());
+            if (target != bar->value() || running) {
+                scroll_animation->stop();
+                scroll_animation->setStartValue(bar->value());
+                scroll_animation->setEndValue(target);
+                scroll_animation->start();
+            }
+            return true; // swallow it so Qt's own stepped scrolling doesn't fight the animation
         }
-        const bool running = scroll_animation->state() == QAbstractAnimation::Running;
-        const int base = running ? scroll_animation->endValue().toInt() : bar->value();
-        const int target = qBound(bar->minimum(), base - delta, bar->maximum());
-        if (target != bar->value() || running) {
-            scroll_animation->stop();
-            scroll_animation->setStartValue(bar->value());
-            scroll_animation->setEndValue(target);
-            scroll_animation->start();
-        }
-        return true; // swallow it so Qt's own stepped scrolling doesn't fight the animation
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -1431,30 +1452,6 @@ void HomeScreenWidget::UpdateBattery() {
     battery_percent_label->setText(QStringLiteral("%1%").arg(state.percent));
     battery_label->setToolTip(state.charging ? tr("Battery %1% (charging)").arg(state.percent)
                                              : tr("Battery %1%").arg(state.percent));
-}
-
-void HomeScreenWidget::UpdateTileIconSizeForWidth(int available_width) {
-    const int count = tile_list->count();
-    if (count == 0) {
-        return;
-    }
-    const int usable = qMax(available_width - 32, MinTileIconSize);
-    int candidate = DefaultTileIconSize;
-    const int natural_at_default = count * TileCellWidth(DefaultTileIconSize);
-    if (natural_at_default < usable) {
-        // If all tiles naturally fit within the available width with room to spare,
-        // scale them up proportionally up to MaxTileIconSize.
-        candidate = usable / count - TileSpacing * 2 - TileHoverDelegate::HoverPadding * 2;
-        candidate = qBound(DefaultTileIconSize, candidate, MaxTileIconSize);
-    }
-    if (candidate == tile_icon_size) {
-        return;
-    }
-    tile_icon_size = candidate;
-    tile_list->setIconSize(QSize(tile_icon_size, tile_icon_size));
-    tile_list->setGridSize(QSize(TileCellWidth(tile_icon_size), TileCellHeight(tile_icon_size)));
-    tile_list->setFixedHeight(TileCellHeight(tile_icon_size) + TileSpacing * 2);
-    Refresh(); // Re-render icons at the new size instead of just stretching the old pixmaps.
 }
 
 void HomeScreenWidget::UpdateTileListWidth() {
@@ -1567,7 +1564,7 @@ void HomeScreenWidget::Refresh() {
         painter.setPen(pen);
         painter.drawRoundedRect(2, 2, tile_icon_size - 4, tile_icon_size - 4, 3, 3);
         QFont plus_font = font();
-        plus_font.setPointSize(28);
+        plus_font.setPointSize(36);
         painter.setFont(plus_font);
         painter.drawText(QRect(0, 0, tile_icon_size, tile_icon_size), Qt::AlignCenter,
                          QStringLiteral("+"));
