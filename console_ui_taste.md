@@ -1,15 +1,15 @@
-# Nintendo UI Taste
+# Console UI Taste
 
-Rules from the Switch home menu, eShop, Sticker Book and software pages.
+Rules for a sleek, console-style TV/handheld dashboard interface.
 
 ## 1. Selection is scale + inversion, never a border
 The biggest tell. A focused tile gets no outline — it grows ~4–8%, gains a soft shadow,
-and **flips to the opposite luminance**: on the green Sticker Book the focused row turns
+and **flips to the opposite luminance**: the focused row turns
 solid white with dark text. Outline-only focus reads as "generic desktop app".
 
 ## 2. One saturated hue owns the screen
-Each context commits to one brand colour — eShop orange, dashboard blue, Sticker Book
-green, software pages near-black. Depth comes from **tinting that same hue** (white at
+Each context commits to one brand colour — vibrant accent, dashboard blue,
+software pages near-black. Depth comes from **tinting that same hue** (white at
 8–15% alpha), never a second unrelated grey. Two mismatched greys is the classic mistake.
 
 ## 3. Nested, decreasing corner radii

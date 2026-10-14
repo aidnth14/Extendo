@@ -66,8 +66,8 @@ if (ENABLE_QT)
                 "${PROJECT_SOURCE_DIR}/dist/home_screen_icons"
                 "${HOME_ASSET_DEST}/home_icons"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${PROJECT_SOURCE_DIR}/dist/fonts/NINTENDOSWITCHUI.TTF"
-                "${HOME_ASSET_DEST}/NINTENDOSWITCHUI.TTF"
+                "${PROJECT_SOURCE_DIR}/dist/fonts/extendo_ui.ttf"
+                "${HOME_ASSET_DEST}/extendo_ui.ttf"
         COMMENT "Copying home screen icons and UI font into the app"
         VERBATIM
     )

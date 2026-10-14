@@ -599,7 +599,7 @@ void GMainWindow::InitializeWidgets() {
 
     // Floating Home button, shown only while a game is running (the home screen itself already
     // has its own navigation) — lets you get back to the game shelf without hunting for the
-    // menu bar, matching the physical Home button on real Switch/3DS hardware.
+    // menu bar, matching the physical Home button.
     home_button = new QToolButton(ui->centralwidget);
     // No tooltip: these two buttons are only ever shown on top of the running game's
     // Vulkan/MoltenVK surface, where native QToolTip popups render corrupted.
@@ -3190,7 +3190,7 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
     QString qss;
     // Pin the font family here too: Qt resets it to the system default whenever any other font
     // property (e.g. font-weight below) is set via QSS.
-    qss += QStringLiteral("* { font-family: 'Nintendo Switch UI'; }");
+    qss += QStringLiteral("* { font-family: 'Roboto', sans-serif; }");
     qss += QStringLiteral("QDialog, QWidget#configureDialog { background-color: %1; }").arg(bg);
     qss += QStringLiteral("QGroupBox { background: transparent; border: none; font-weight: 600;"
                           " color: %1; margin-top: 20px; }")
@@ -3245,7 +3245,7 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
                        " QSpinBox:focus, QDoubleSpinBox:focus, QSlider:focus, QPushButton:focus {"
                        " border: 1px solid %1; border-radius: 6px; }")
             .arg(focus);
-    // Switch-style Back/OK: flat, no chrome — just the circular glyph (set in code below) + text.
+    // Flat Back/OK buttons: flat, no chrome — just the circular glyph (set in code below) + text.
     qss += QStringLiteral("QDialogButtonBox QPushButton { background: transparent; border: none;"
                           " border-radius: 6px; color: %1; padding: 4px 10px; font-weight: 600; }")
                .arg(text);
@@ -3271,9 +3271,9 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
         }
     }
 
-    // Switch-style button prompts: a small colored circular glyph (B/A) before the label,
+    // Action button prompts: a small colored circular glyph (B/A) before the label,
     // replacing the generic rectangular Cancel/OK buttons.
-    auto make_switch_badge = [](const QString& letter, const QColor& color) {
+    auto make_action_badge = [](const QString& letter, const QColor& color) {
         constexpr int BadgeSize = 22;
         QPixmap pixmap(BadgeSize, BadgeSize);
         pixmap.fill(Qt::transparent);
@@ -3294,11 +3294,11 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
         if (auto* cancel_button = button_box->button(QDialogButtonBox::Cancel)) {
             cancel_button->setText(tr("Back"));
             cancel_button->setIcon(
-                make_switch_badge(QStringLiteral("B"), QColor(0xe0, 0x3c, 0x3c)));
+                make_action_badge(QStringLiteral("B"), QColor(0xe0, 0x3c, 0x3c)));
             cancel_button->setIconSize(QSize(22, 22));
         }
         if (auto* ok_button = button_box->button(QDialogButtonBox::Ok)) {
-            ok_button->setIcon(make_switch_badge(QStringLiteral("A"), QColor(0x3c, 0x8c, 0xe0)));
+            ok_button->setIcon(make_action_badge(QStringLiteral("A"), QColor(0x3c, 0x8c, 0xe0)));
             ok_button->setIconSize(QSize(22, 22));
         }
     }
@@ -5322,16 +5322,16 @@ int LaunchQtFrontend(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
 
-    // App-wide custom font: Nintendo Switch UI. Loaded as a loose file from the bundle's
+    // App-wide custom font: Extendo UI. Loaded as a loose file from the bundle's
     // Resources (copied there at bundle time), then set as the default QApplication font so
     // every widget inherits it.
     {
 #ifdef Q_OS_MAC
-        const QString font_path = QCoreApplication::applicationDirPath() +
-                                  QStringLiteral("/../Resources/NINTENDOSWITCHUI.TTF");
+        const QString font_path =
+            QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/extendo_ui.ttf");
 #else
         const QString font_path =
-            QCoreApplication::applicationDirPath() + QStringLiteral("/NINTENDOSWITCHUI.TTF");
+            QCoreApplication::applicationDirPath() + QStringLiteral("/extendo_ui.ttf");
 #endif
         const int font_id = QFontDatabase::addApplicationFont(font_path);
         if (font_id != -1) {

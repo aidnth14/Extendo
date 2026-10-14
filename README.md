@@ -1,14 +1,10 @@
-![Azahar Emulator](https://azahar-emu.org/resources/images/logo/azahar-name-and-logo.svg)
+# Extendo
 
-# Extendo — Switch UI Fork
+This is Extendo, a personal fork of Azahar, an open-source 3DS emulator.
+This fork replaces the stock game list with a custom console-style home screen (tile shelf + pill dock bar),
+adds custom cover art, a custom background, and an in-window settings popup.
 
-This is Extendo, a personal fork of [Azahar](https://github.com/azahar-emu/azahar), a free and open-source
-high-level Nintendo 3DS emulator. This fork replaces the stock game list with a custom
-Switch-style home screen (tile shelf + pill dock bar), adds custom cover art, a custom
-background, and an in-window settings popup.
-
-*Extendo is not affiliated with or endorsed by Nintendo. This fork is not affiliated with the
-upstream Azahar project.*
+*Extendo is an independent personal project and is not affiliated with the upstream Azahar project.*
 
 Repo: https://github.com/yuske014/Extendo
 

@@ -345,7 +345,7 @@ BatteryState ReadBatteryState() {
     return state;
 }
 
-// Switch-style battery pill: rounded body, nub on the right, fill proportional to charge.
+// Battery pill: rounded body, nub on the right, fill proportional to charge.
 QPixmap RenderBatteryIcon(const BatteryState& state, const QColor& color, qreal dpr) {
     constexpr int Width = 26;
     constexpr int Height = 13;
@@ -652,8 +652,7 @@ public:
 
         // Taste rule 1: focus reads as scale + luminance inversion, never an outline. A plate
         // in the opposite luminance to the foreground is laid under the art and inflated past
-        // it, so the focused tile gains a bright (or dark) surround the way the Switch's
-        // Sticker Book flips its focused row to solid white.
+        // it, so the focused tile gains a clean, bright (or dark) surround.
         if (emphasis > 0.0) {
             QColor plate = text_color;
             plate.setAlphaF(0.92 * emphasis);
@@ -905,7 +904,7 @@ void HomeScreenWidget::SetupUi() {
     main_layout->addLayout(top_bar);
 
     // Empty state: one big "+" prompt, pinned left, vertically centered. Shown when no
-    // games are found, mirroring Switch's first-run "insert cartridge" prompt.
+    // games are found.
     empty_state_container = new QWidget(this);
     auto* empty_v = new QVBoxLayout(empty_state_container);
     empty_v->setContentsMargins(0, 0, 0, 0);
@@ -923,7 +922,7 @@ void HomeScreenWidget::SetupUi() {
     empty_v->addStretch(1);
     main_layout->addWidget(empty_state_container, 1);
 
-    // Populated state: bottom-center tile shelf + pill dock, Switch-style.
+    // Populated state: bottom-center tile shelf + pill dock.
     populated_container = new QWidget(this);
     auto* populated_v = new QVBoxLayout(populated_container);
     populated_v->setContentsMargins(0, 0, 0, 0);
@@ -958,7 +957,7 @@ void HomeScreenWidget::SetupUi() {
     connect(tile_list, &QListWidget::entered, this,
             [this](const QModelIndex& index) { tile_hover_delegate->SetHoveredIndex(index); });
 
-    // Console-style activation: a single click launches, matching the Switch home menu. Qt's
+    // Console-style activation: a single click launches, matching the home menu. Qt's
     // itemActivated only fires on the platform's double-click gesture, so itemClicked is the
     // one wired up here; itemActivated stays connected as well so Enter/keyboard (and later
     // controller) activation still works. OnTileActivated debounces so the two can't both fire
@@ -1354,7 +1353,7 @@ void HomeScreenWidget::Refresh() {
             icon.fill(Qt::darkGray);
         }
 
-        // Near-square corners (radius 3) matching the reference Switch-style shelf, not the
+        // Near-square corners (radius 3) matching the reference tile shelf, not the
         // heavily rounded 16px used elsewhere in this UI.
         auto* tile = new QListWidgetItem(
             QIcon(RoundedPixmap(icon, tile_icon_size, 3, devicePixelRatioF())), QString());
@@ -1364,7 +1363,7 @@ void HomeScreenWidget::Refresh() {
         ++games_added;
     }
 
-    // Trailing "+" tile to add a new game directory, Switch-cartridge-slot style.
+    // Trailing "+" tile to add a new game directory.
     const qreal dpr = devicePixelRatioF();
     QPixmap plus_pixmap(qRound(tile_icon_size * dpr), qRound(tile_icon_size * dpr));
     plus_pixmap.setDevicePixelRatio(dpr);

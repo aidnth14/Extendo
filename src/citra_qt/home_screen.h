@@ -20,7 +20,7 @@ class QBoxLayout;
 class QPropertyAnimation;
 class TileHoverDelegate;
 
-/// Nintendo Switch-style horizontal tile shelf shown in place of the tree-view game list.
+/// Horizontal console-style tile shelf shown in place of the tree-view game list.
 /// Reads from the same QStandardItemModel that GameList populates, so it stays in sync with
 /// whatever directories the user has configured without duplicating any ROM-scanning logic.
 class HomeScreenWidget : public QWidget {
