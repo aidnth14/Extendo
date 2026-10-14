@@ -1,13 +1,13 @@
 ![Azahar Emulator](https://azahar-emu.org/resources/images/logo/azahar-name-and-logo.svg)
 
-# Azahar — Switch UI Fork
+# Extendo — Switch UI Fork
 
-This is a personal fork of [Azahar](https://github.com/azahar-emu/azahar), a free and open-source
+This is Extendo, a personal fork of [Azahar](https://github.com/azahar-emu/azahar), a free and open-source
 high-level Nintendo 3DS emulator. This fork replaces the stock game list with a custom
 Switch-style home screen (tile shelf + pill dock bar), adds custom cover art, a custom
 background, and an in-window settings popup.
 
-*Azahar is not affiliated with or endorsed by Nintendo. This fork is not affiliated with the
+*Extendo is not affiliated with or endorsed by Nintendo. This fork is not affiliated with the
 upstream Azahar project.*
 
 Repo: https://github.com/yuske014/azahar-switch-ui
@@ -59,11 +59,11 @@ export PATH="$(brew --prefix qt@6)/bin:$PATH"
 ninja bundle
 
 # Run it
-open bundle/azahar.app
+open bundle/extendo.app
 ```
 
 > First launch: macOS will warn the app is from an unidentified developer (it's unsigned).
-> Right-click the app → Open, or run `xattr -cr bundle/azahar.app` once before launching.
+> Right-click the app → Open, or run `xattr -cr bundle/extendo.app` once before launching.
 
 ---
 
@@ -85,7 +85,7 @@ cmake .. -GNinja \
 ninja
 
 # Run it
-./bin/Release/azahar
+./bin/Release/extendo
 ```
 
 For other distros, install the equivalent Qt6/SDL2/Vulkan dev packages via your package
@@ -110,7 +110,7 @@ winget install Kitware.CMake Ninja-build.Ninja Git.Git qt.qt6 GitHub.GitLFS
 git clone https://github.com/microsoft/vcpkg C:\vcpkg
 C:\vcpkg\bootstrap-vcpkg.bat
 
-# 4. Configure + build (run from the azahar repo root, in a "Developer PowerShell for VS")
+# 4. Configure + build (run from the extendo repo root, in a "Developer PowerShell for VS")
 mkdir build; cd build
 cmake .. -GNinja `
     -DCMAKE_BUILD_TYPE=Release `
@@ -121,7 +121,7 @@ cmake .. -GNinja `
 ninja
 
 # Run it
-.\bin\Release\azahar.exe
+.\bin\Release\extendo.exe
 ```
 
 > Adjust the Qt path (`C:\Qt\6.x.x\msvc2022_64`) to match whatever version `winget` installed —

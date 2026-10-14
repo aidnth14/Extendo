@@ -42,6 +42,11 @@
 #ifdef Q_OS_MAC
 #include <IOKit/ps/IOPSKeys.h>
 #include <IOKit/ps/IOPowerSources.h>
+#elif defined(Q_OS_WIN)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 namespace {
@@ -50,7 +55,7 @@ constexpr int DefaultTileIconSize = 96;
 constexpr int MinTileIconSize = 72;
 constexpr int MaxTileIconSize = 160;
 constexpr int TileSpacing = 12;
-constexpr int PillBarHeight = 61;
+constexpr int PillBarHeight = 50;
 
 // Cover art and backgrounds are frequently much lower-res than the area they're stretched to
 // fill; plain bilinear scaling (Qt::SmoothTransformation) leaves that soft/pixelated. This
@@ -144,6 +149,74 @@ qreal AverageLuminance(const QPixmap& pixmap) {
         }
     }
     return count > 0 ? (sum / count) / 255.0 : 0.0;
+}
+
+// Separable box blur, run three times to approximate a gaussian. Used only on wallpapers that
+// have to be upscaled: a small, JPEG-compressed source blown up several times over magnifies
+// its own compression artifacts into visible grain, and no resampler can invent the missing
+// detail. Softening in proportion to the upscale turns that grain into a deliberate-looking
+// out-of-focus backdrop. Runs once per resize, never per frame.
+QImage BoxBlur(const QImage& source, int radius) {
+    if (radius < 1) {
+        return source;
+    }
+    QImage image = source.convertToFormat(QImage::Format_ARGB32);
+    const int w = image.width();
+    const int h = image.height();
+    if (w < 2 || h < 2) {
+        return image;
+    }
+    const int span = radius * 2 + 1;
+
+    for (int pass = 0; pass < 3; ++pass) {
+        // Horizontal, then vertical — a box blur is separable, so two 1D passes per round cost
+        // O(radius) instead of the O(radius^2) a 2D kernel would.
+        for (int axis = 0; axis < 2; ++axis) {
+            const int outer = axis == 0 ? h : w;
+            const int inner = axis == 0 ? w : h;
+            QImage scratch = image;
+            for (int o = 0; o < outer; ++o) {
+                for (int i = 0; i < inner; ++i) {
+                    int r = 0, g = 0, b = 0, a = 0;
+                    for (int k = -radius; k <= radius; ++k) {
+                        const int idx = qBound(0, i + k, inner - 1);
+                        const QRgb px = axis == 0 ? scratch.pixel(idx, o) : scratch.pixel(o, idx);
+                        r += qRed(px);
+                        g += qGreen(px);
+                        b += qBlue(px);
+                        a += qAlpha(px);
+                    }
+                    const QRgb out = qRgba(r / span, g / span, b / span, a / span);
+                    if (axis == 0) {
+                        image.setPixel(i, o, out);
+                    } else {
+                        image.setPixel(o, i, out);
+                    }
+                }
+            }
+        }
+    }
+    return image;
+}
+
+// Average luminance of just one sub-rectangle of a pixmap, given in normalized (0..1)
+// coordinates. A single whole-image average is what makes light wallpapers fail: a photo that
+// is bright where the text sits but dark elsewhere averages out to "dark", so white text gets
+// chosen and then disappears into the bright region. Sampling only the area a given UI element
+// actually covers is what makes the choice correct for that element.
+qreal RegionLuminance(const QPixmap& pixmap, const QRectF& region) {
+    if (pixmap.isNull()) {
+        return 0.0;
+    }
+    const QRect pixel_region =
+        QRectF(region.x() * pixmap.width(), region.y() * pixmap.height(),
+               region.width() * pixmap.width(), region.height() * pixmap.height())
+            .toRect()
+            .intersected(pixmap.rect());
+    if (pixel_region.isEmpty()) {
+        return 0.0;
+    }
+    return AverageLuminance(pixmap.copy(pixel_region));
 }
 
 QPixmap RoundedPixmap(const QPixmap& source, int size, int radius, qreal dpr = 1.0) {
@@ -262,6 +335,14 @@ BatteryState ReadBatteryState() {
         CFRelease(sources);
     }
     CFRelease(info);
+#elif defined(Q_OS_WIN)
+    SYSTEM_POWER_STATUS sps;
+    if (GetSystemPowerStatus(&sps)) {
+        if (sps.BatteryLifePercent != 255) {
+            state.percent = qBound(0, static_cast<int>(sps.BatteryLifePercent), 100);
+        }
+        state.charging = (sps.BatteryFlag & 8) != 0 || sps.ACLineStatus == 1;
+    }
 #endif
     return state;
 }
@@ -428,7 +509,7 @@ QToolButton* MakeIconPillButton(const QString& icon_resource_path, const QString
 const QString DefaultStyleQss = QStringLiteral(
     "HomeScreenWidget, HomeScreenWidget QLabel, HomeScreenWidget QToolButton,"
     " HomeScreenWidget QListWidget { color: palette(text); background: transparent; }\n"
-    "#pillBar { background-color: palette(button); border-radius: 30px; }\n"
+    "#pillBar { background-color: palette(button); border-radius: 25px; }\n"
     "#tileList { background: transparent; border: none; }\n"
     "#tileList::item { border: none; padding: 0px; background: transparent; }\n"
     "#tileList::item:selected { background: transparent; }\n"
@@ -486,7 +567,9 @@ public:
     static constexpr int TitleRole = Qt::UserRole + 103;
     /// Band reserved *below* the art for the hover title. The art never enters this band, so
     /// the label can't collide with the cover image the way a centered overlay would.
-    static constexpr int TitleStripHeight = 22;
+    static constexpr int TitleStripHeight = 30;
+    /// Clear space between the title band and the top edge of the cover art.
+    static constexpr int TitleGap = 6;
     /// Slack around the art inside its own cell. The hover animation scales the art up about
     /// its centre, and the view clips painting to the cell rect — without this margin the
     /// enlarged art would get its edges shaved off mid-animation.
@@ -545,7 +628,7 @@ public:
         Q_UNUSED(index);
         const QSize icon_size = tile_list->iconSize();
         return QSize(icon_size.width() + HoverPadding * 2,
-                     icon_size.height() + HoverPadding * 2 + TitleStripHeight);
+                     icon_size.height() + HoverPadding * 2 + TitleStripHeight + TitleGap);
     }
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option,
@@ -564,9 +647,11 @@ public:
         // painted over the cover art.
         const QRect cell = option.rect;
         const QSize icon_size = tile_list->iconSize();
+        // Title band sits ABOVE the art, separated by TitleGap, so the label never touches or
+        // overlaps the cover image.
         QRect icon_rect(0, 0, icon_size.width(), icon_size.height());
-        icon_rect.moveCenter(
-            QPoint(cell.center().x(), cell.top() + HoverPadding + icon_size.height() / 2));
+        icon_rect.moveCenter(QPoint(cell.center().x(), cell.top() + TitleStripHeight + TitleGap +
+                                                           HoverPadding + icon_size.height() / 2));
 
         // Taste rule 1: focus reads as scale + luminance inversion, never an outline. A plate
         // in the opposite luminance to the foreground is laid under the art and inflated past
@@ -601,17 +686,17 @@ public:
         if (emphasis > 0.0) {
             const QString title = index.data(TitleRole).toString();
             if (!title.isEmpty()) {
-                const QRect title_rect(cell.left(), icon_rect.bottom() + HoverPadding,
-                                       cell.width(), TitleStripHeight);
+                const QRect title_rect(cell.left(), cell.top(), cell.width(), TitleStripHeight);
                 QColor title_color = text_color;
                 title_color.setAlphaF(emphasis);
                 painter->setPen(title_color);
                 QFont title_font = painter->font();
-                title_font.setPointSize(qMax(8, title_font.pointSize() - 1));
+                title_font.setPointSizeF(title_font.pointSizeF() * 1.6);
+                title_font.setWeight(QFont::Bold);
                 painter->setFont(title_font);
                 const QString elided = painter->fontMetrics().elidedText(
                     title, Qt::ElideRight, title_rect.width() - 4);
-                painter->drawText(title_rect, Qt::AlignHCenter | Qt::AlignTop, elided);
+                painter->drawText(title_rect, Qt::AlignHCenter | Qt::AlignVCenter, elided);
             }
         }
 
@@ -633,7 +718,8 @@ static int TileCellWidth(int icon_size) {
 }
 
 static int TileCellHeight(int icon_size) {
-    return icon_size + TileHoverDelegate::HoverPadding * 2 + TileHoverDelegate::TitleStripHeight;
+    return icon_size + TileHoverDelegate::HoverPadding * 2 +
+           TileHoverDelegate::TitleStripHeight + TileHoverDelegate::TitleGap;
 }
 
 // Stored as plain tab-separated "game_path\tcover_path" lines rather than QSettings/INI,
@@ -717,6 +803,20 @@ void HomeScreenWidget::ApplyCombinedStylesheet() {
     // out-specifies the generic QToolButton rule above — so recolor its "+" glyph (color) and
     // its square border (border-color) here too, following the same background detection: black
     // on a light wallpaper, white on a dark one.
+    // Harmony rule: the dock and the legend badges are surfaces that sit *on* the wallpaper, so
+    // they must answer to the same measurement the text does — not to the theme palette. A dark
+    // theme on a bright photo was producing black text on a black pill, because the text asked
+    // the wallpaper and the pill asked the theme. Deriving the surface as the inverse of the
+    // text colour keeps the pair in step for any wallpaper/theme combination.
+    const bool dark_text = home_text_color == QColor(Qt::black);
+    QColor surface = dark_text ? QColor(0xff, 0xff, 0xff) : QColor(0x16, 0x18, 0x1d);
+    surface.setAlphaF(0.78); // translucent so the wallpaper still reads through
+    const QString surface_rgba = QStringLiteral("rgba(%1, %2, %3, %4)")
+                                     .arg(surface.red())
+                                     .arg(surface.green())
+                                     .arg(surface.blue())
+                                     .arg(surface.alphaF(), 0, 'f', 2);
+
     const QString text_color_override =
         QStringLiteral("\nHomeScreenWidget, HomeScreenWidget QLabel, HomeScreenWidget "
                        "QToolButton, HomeScreenWidget QListWidget { color: %1; }\n"
@@ -727,8 +827,10 @@ void HomeScreenWidget::ApplyCombinedStylesheet() {
                        // every descendant transparent; #pillBar keeps its fill via its ID rule,
                        // which out-specifies this.
                        "HomeScreenWidget QWidget { background: transparent; }\n"
-                       "#largeAddButton { color: %1; border-color: %1; }\n")
-            .arg(home_text_color.name());
+                       "#largeAddButton { color: %1; border-color: %1; }\n"
+                       // Dock fill tracks the wallpaper, not the theme (see above).
+                       "#pillBar { background-color: %2; }\n")
+            .arg(home_text_color.name(), surface_rgba);
     setStyleSheet(external_style_qss + text_color_override);
 }
 
@@ -742,8 +844,16 @@ void HomeScreenWidget::UpdateTextColorForBackground() {
     // light base (black text), every other theme is a dark base (white text). With a wallpaper,
     // judge legibility by its actual brightness instead.
     const qreal base_luminance = IsWhiteTheme() ? 1.0 : 0.0;
-    const qreal luminance =
-        background_pixmap.isNull() ? base_luminance : AverageLuminance(background_pixmap);
+    // Sample the two bands that actually carry text (top status strip and bottom dock/legend
+    // strip) and take the brighter of the two, so a wallpaper that is bright in either place
+    // forces dark text rather than averaging that brightness away against the rest of the
+    // image. This is what the plain whole-image average got wrong on light photos.
+    qreal luminance = base_luminance;
+    if (!background_scaled.isNull()) {
+        const qreal top = RegionLuminance(background_scaled, QRectF(0.0, 0.0, 1.0, 0.16));
+        const qreal bottom = RegionLuminance(background_scaled, QRectF(0.0, 0.84, 1.0, 0.16));
+        luminance = qMax(top, bottom);
+    }
     const QColor new_color = luminance > 0.6 ? QColor(Qt::black) : QColor(Qt::white);
     if (new_color == home_text_color) {
         return;
@@ -760,6 +870,7 @@ void HomeScreenWidget::UpdateTextColorForBackground() {
     if (tile_list) {
         Refresh();
     }
+    update(); // scrim colour is derived from home_text_color
 }
 
 HomeScreenWidget::~HomeScreenWidget() = default;
@@ -929,7 +1040,10 @@ void HomeScreenWidget::UpdateLegendBar() {
     if (!legend_bar) {
         return;
     }
-    const QColor surface = IsWhiteTheme() ? QColor(0xff, 0xff, 0xff) : QColor(0x16, 0x18, 0x1d);
+    // Same harmony rule as the dock: knock the letter out in the inverse of the glyph colour,
+    // which is itself derived from the wallpaper — so the badges never end up dark-on-dark.
+    const QColor surface = home_text_color == QColor(Qt::black) ? QColor(0xff, 0xff, 0xff)
+                                                                : QColor(0x16, 0x18, 0x1d);
     for (QLabel* glyph : legend_bar->findChildren<QLabel*>(QStringLiteral("legendGlyph"))) {
         glyph->setPixmap(RenderGlyphBadge(glyph->property("letter").toString(), home_text_color,
                                           surface, devicePixelRatioF()));
@@ -986,18 +1100,19 @@ void HomeScreenWidget::ApplyAppearanceSettings() {
             // Pre-scale+sharpen once to a generous cap rather than on every paintEvent: the
             // per-frame cost of a plain downscale from this cached copy is negligible, while
             // redoing the sharpen convolution every repaint would not be.
-            const QSize cap(1600, 1000);
-            const QSize target = source.size().boundedTo(cap) == source.size()
-                                     ? source.size()
-                                     : source.size().scaled(cap, Qt::KeepAspectRatioByExpanding);
-            background_pixmap = ScaleAndSharpen(source, target, Qt::KeepAspectRatio);
+            // Keep the untouched source and scale straight to the display size once (see
+            // RebuildScaledBackground). The old path sharpened the photo with the cover-art
+            // kernel, downsampled it to a 1600x1000 cap, then rescaled it again on every
+            // paint — three lossy steps that produced the crunchy, haloed result. Sharpening
+            // only ever made sense for tiny icons being upscaled, never for a full photo.
+            background_pixmap = source;
         } else {
             background_pixmap = QPixmap();
         }
     } else {
         background_pixmap = QPixmap();
     }
-    UpdateTextColorForBackground();
+    RebuildScaledBackground();
 
     QFont font = title_label->font();
     if (!UISettings::values.home_font_family.isEmpty()) {
@@ -1033,19 +1148,64 @@ void HomeScreenWidget::paintEvent(QPaintEvent* event) {
         base_painter.fillRect(rect(), IsWhiteTheme() ? QColor(0xff, 0xff, 0xff)
                                                      : QColor(0x16, 0x18, 0x1d));
     }
-    if (!background_pixmap.isNull()) {
+    if (!background_scaled.isNull()) {
         QPainter painter(this);
-        const QPixmap scaled = background_pixmap.scaled(size(), Qt::KeepAspectRatioByExpanding,
-                                                         Qt::SmoothTransformation);
-        const int x = (width() - scaled.width()) / 2;
-        const int y = (height() - scaled.height()) / 2;
-        painter.drawPixmap(x, y, scaled);
+        const int x = qRound((width() - background_scaled.width() / devicePixelRatioF()) / 2.0);
+        const int y = qRound((height() - background_scaled.height() / devicePixelRatioF()) / 2.0);
+        painter.drawPixmap(x, y, background_scaled);
+
+        // Contrast scrims. Region sampling alone can't rescue a strip that is genuinely
+        // half-bright and half-dark, so the two bands that carry text get a soft gradient in
+        // the opposite luminance. It stays subtle over friendly wallpapers and does the heavy
+        // lifting over hostile ones, which is what keeps text legible on *any* upload.
+        const QColor scrim = home_text_color == QColor(Qt::white) ? Qt::black : Qt::white;
+        const int band = qMax(64, height() / 6);
+
+        QLinearGradient top(0, 0, 0, band);
+        QColor top_strong = scrim;
+        top_strong.setAlphaF(0.45);
+        QColor clear = scrim;
+        clear.setAlphaF(0.0);
+        top.setColorAt(0.0, top_strong);
+        top.setColorAt(1.0, clear);
+        painter.fillRect(QRect(0, 0, width(), band), top);
+
+        QLinearGradient bottom(0, height() - band, 0, height());
+        bottom.setColorAt(0.0, clear);
+        bottom.setColorAt(1.0, top_strong);
+        painter.fillRect(QRect(0, height() - band, width(), band), bottom);
     }
     QWidget::paintEvent(event);
 }
 
+// Scales the untouched wallpaper source straight to the current widget size, once, and
+// re-derives the per-region foreground colours from that scaled copy.
+void HomeScreenWidget::RebuildScaledBackground() {
+    if (background_pixmap.isNull() || width() <= 0 || height() <= 0) {
+        background_scaled = QPixmap();
+        return;
+    }
+    const qreal dpr = devicePixelRatioF();
+    const QSize target = size() * dpr;
+    // How far past its native size the source has to stretch to fill the window.
+    const qreal upscale = qMax(qreal(target.width()) / qMax(1, background_pixmap.width()),
+                               qreal(target.height()) / qMax(1, background_pixmap.height()));
+    QPixmap scaled = background_pixmap.scaled(target, Qt::KeepAspectRatioByExpanding,
+                                              Qt::SmoothTransformation);
+    if (upscale > 1.6) {
+        // Blur in proportion to how badly the image is being stretched, capped so a very small
+        // source doesn't turn into a featureless smear.
+        const int radius = qBound(1, qRound((upscale - 1.0) * 1.6), 8);
+        scaled = QPixmap::fromImage(BoxBlur(scaled.toImage(), radius));
+    }
+    background_scaled = scaled;
+    background_scaled.setDevicePixelRatio(dpr);
+    UpdateTextColorForBackground();
+}
+
 void HomeScreenWidget::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
+    RebuildScaledBackground();
     ApplyPillBarPlacement(); // hand-positioned, so it has to follow the window
     UpdateLegendBar();
     UpdateTileIconSizeForWidth(width());

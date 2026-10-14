@@ -65,6 +65,8 @@ private:
     void ApplyPillBarPlacement();
     /// Repaints and re-docks the persistent A/Y button legend.
     void UpdateLegendBar();
+    /// Rescales the wallpaper source to the widget size and re-derives contrast colours.
+    void RebuildScaledBackground();
     void LoadCustomCovers();
     void SaveCustomCovers();
     /// Recomputes home_text_color from the current background's brightness and reapplies it.
@@ -84,7 +86,8 @@ private:
     QWidget* populated_container = nullptr;
     QToolButton* large_add_button = nullptr;
     QTimer* clock_timer = nullptr;
-    QPixmap background_pixmap;
+    QPixmap background_pixmap; // untouched source
+    QPixmap background_scaled; // cached, scaled to the widget once per resize
     QFileSystemWatcher* style_watcher = nullptr;
     // Auto-picked (white on a dark background, black on a bright one) so home screen text
     // stays legible regardless of the user's chosen wallpaper.
