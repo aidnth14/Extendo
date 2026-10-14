@@ -21,7 +21,11 @@ cmake ../.. -GNinja \
 	"${EXTRA_CMAKE_FLAGS[@]}"
 ninja
 ninja bundle
-mv ./bundle/azahar.app ./bundle/Azahar.app # TODO: Can this be done in CMake?
+if [ -d ./bundle/azahar.app ]; then
+    mv ./bundle/azahar.app ./bundle/Azahar.app
+elif [ -d ./bundle/extendo.app ]; then
+    mv ./bundle/extendo.app ./bundle/Extendo.app
+fi
 
 
 CURRENT_ARCH=`arch`

@@ -13,7 +13,13 @@ cp -a $BUILD_DIR/x86_64/bundle $UNIVERSAL_DIR # ARM64 has some extra libraries, 
                                               # Use x86_64 as a base.
 
 # Executable binary paths that need to be combined.
-BIN_PATHS=(Azahar.app/Contents/MacOS/azahar)
+if [ -d "$BUNDLE_DIR/Extendo.app" ]; then
+    BIN_PATHS=(Extendo.app/Contents/MacOS/extendo)
+    APP_PATHS=(Extendo.app)
+else
+    BIN_PATHS=(Azahar.app/Contents/MacOS/azahar)
+    APP_PATHS=(Azahar.app)
+fi
 
 # Dylib paths that need to be combined.
 IFS=$'\n'
@@ -39,7 +45,6 @@ done
 rm -rf "${BUNDLE_DIR}/libs"
 
 # Re-sign executables and bundles after combining.
-APP_PATHS=(Azahar.app)
 for APP_PATH in "${APP_PATHS[@]}"; do
     codesign --deep -fs - $BUNDLE_DIR/$APP_PATH
 done

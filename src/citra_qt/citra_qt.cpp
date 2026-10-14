@@ -15,13 +15,13 @@
 #include <QFileDialog>
 #include <QFontDatabase>
 #include <QFutureWatcher>
-#include <QPropertyAnimation>
-#include <QStyleFactory>
 #include <QGraphicsDropShadowEffect>
 #include <QIcon>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPalette>
+#include <QPropertyAnimation>
+#include <QStyleFactory>
 #include <QSysInfo>
 #include <QtConcurrent/QtConcurrentMap>
 #include <QtConcurrent/QtConcurrentRun>
@@ -465,8 +465,8 @@ GMainWindow::GMainWindow(Core::System& system_)
     ConnectMenuEvents();
     ConnectWidgetEvents();
 
-    LOG_INFO(Frontend, "Extendo Version: {} | {}-{}", Common::g_build_fullname, Common::g_scm_branch,
-             Common::g_scm_desc);
+    LOG_INFO(Frontend, "Extendo Version: {} | {}-{}", Common::g_build_fullname,
+             Common::g_scm_branch, Common::g_scm_desc);
     std::string build_variant = Common::g_build_variant;
     if (build_variant == "") {
         build_variant = "N/A";
@@ -3105,10 +3105,9 @@ void GMainWindow::OnEscapePressed() {
         close();
         return;
     }
-    const auto result =
-        QMessageBox::question(this, tr("Quit Session"),
-                              tr("Do you want to quit the current session?"),
-                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    const auto result = QMessageBox::question(this, tr("Quit Session"),
+                                              tr("Do you want to quit the current session?"),
+                                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (result == QMessageBox::Yes) {
         ui->action_Stop->trigger();
     }
@@ -3118,10 +3117,9 @@ void GMainWindow::OnHomeButtonClicked() {
     if (!emulation_running) {
         return;
     }
-    const auto result =
-        QMessageBox::question(this, tr("Quit Session"),
-                              tr("Do you want to quit the current session?"),
-                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    const auto result = QMessageBox::question(this, tr("Quit Session"),
+                                              tr("Do you want to quit the current session?"),
+                                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (result == QMessageBox::Yes) {
         ui->action_Stop->trigger();
     }
@@ -3242,10 +3240,11 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
     qss += QStringLiteral("QScrollBar::handle { background: transparent; }");
     qss += QStringLiteral("QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }");
     qss += QStringLiteral("QLabel { color: %1; }").arg(text);
-    qss += QStringLiteral("QCheckBox:focus, QRadioButton:focus, QComboBox:focus, QLineEdit:focus,"
-                          " QSpinBox:focus, QDoubleSpinBox:focus, QSlider:focus, QPushButton:focus {"
-                          " border: 1px solid %1; border-radius: 6px; }")
-               .arg(focus);
+    qss +=
+        QStringLiteral("QCheckBox:focus, QRadioButton:focus, QComboBox:focus, QLineEdit:focus,"
+                       " QSpinBox:focus, QDoubleSpinBox:focus, QSlider:focus, QPushButton:focus {"
+                       " border: 1px solid %1; border-radius: 6px; }")
+            .arg(focus);
     // Switch-style Back/OK: flat, no chrome — just the circular glyph (set in code below) + text.
     qss += QStringLiteral("QDialogButtonBox QPushButton { background: transparent; border: none;"
                           " border-radius: 6px; color: %1; padding: 4px 10px; font-weight: 600; }")
@@ -3256,7 +3255,8 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
                .arg(text);
     qss += QStringLiteral("QDialogButtonBox QPushButton:default:hover { background-color: %1; }")
                .arg(hover);
-    qss += QStringLiteral("QDialogButtonBox QPushButton:hover { background-color: %1; }").arg(hover);
+    qss +=
+        QStringLiteral("QDialogButtonBox QPushButton:hover { background-color: %1; }").arg(hover);
     qss += QStringLiteral("QDialogButtonBox { border: none; padding-top: 10px; }");
     dialog->setStyleSheet(qss);
 
@@ -3293,7 +3293,8 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
     if (auto* button_box = dialog->findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"))) {
         if (auto* cancel_button = button_box->button(QDialogButtonBox::Cancel)) {
             cancel_button->setText(tr("Back"));
-            cancel_button->setIcon(make_switch_badge(QStringLiteral("B"), QColor(0xe0, 0x3c, 0x3c)));
+            cancel_button->setIcon(
+                make_switch_badge(QStringLiteral("B"), QColor(0xe0, 0x3c, 0x3c)));
             cancel_button->setIconSize(QSize(22, 22));
         }
         if (auto* ok_button = button_box->button(QDialogButtonBox::Ok)) {
@@ -3353,7 +3354,7 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
         };
         wrap_and_relayout();
         connect(tab_widget, &QTabWidget::currentChanged, dialog,
-               [wrap_and_relayout](int) { wrap_and_relayout(); });
+                [wrap_and_relayout](int) { wrap_and_relayout(); });
         if (auto* selector_list = dialog->findChild<QListWidget*>(QStringLiteral("selectorList"))) {
             selector_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
             connect(selector_list, &QListWidget::itemSelectionChanged, dialog, wrap_and_relayout);
@@ -3415,22 +3416,23 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
 #endif
 
     connect(dialog, &QDialog::accepted, this,
-           [this, dialog, old_theme
+            [this, dialog, old_theme
 #ifdef ENABLE_DISCORD_RPC
-            , old_discord_presence
+             ,
+             old_discord_presence
 #endif
 #ifdef __unix__
-            , old_gamemode
+             ,
+             old_gamemode
 #endif
-           ] {
+    ] {
                 dialog->ApplyConfiguration();
                 InitializeHotkeys();
                 if (UISettings::values.theme != old_theme) {
                     UpdateUITheme();
                 }
 #ifdef ENABLE_DISCORD_RPC
-                if (UISettings::values.enable_discord_presence.GetValue() !=
-                    old_discord_presence) {
+                if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence) {
                     SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
                     discord_rpc->Update(system.IsPoweredOn());
                 }
@@ -3465,16 +3467,16 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
             });
 
     connect(dialog, &QDialog::rejected, this,
-           [this, old_input_profile_index, old_input_profiles, old_touch_from_button_maps] {
-               Settings::values.input_profiles = old_input_profiles;
-               Settings::values.touch_from_button_maps = old_touch_from_button_maps;
-               Settings::LoadProfile(old_input_profile_index);
+            [this, old_input_profile_index, old_input_profiles, old_touch_from_button_maps] {
+                Settings::values.input_profiles = old_input_profiles;
+                Settings::values.touch_from_button_maps = old_touch_from_button_maps;
+                Settings::LoadProfile(old_input_profile_index);
 
-               game_list->SetDirectoryWatcherEnabled(true);
-               settings_overlay->deleteLater();
-               settings_overlay = nullptr;
-               settings_card = nullptr;
-           });
+                game_list->SetDirectoryWatcherEnabled(true);
+                settings_overlay->deleteLater();
+                settings_overlay = nullptr;
+                settings_card = nullptr;
+            });
 }
 
 void GMainWindow::RepositionSettingsOverlay() {
@@ -3486,8 +3488,8 @@ void GMainWindow::RepositionSettingsOverlay() {
     const QSize card_size(qMin(overlay_size.width() - 80, 900),
                           qMin(overlay_size.height() - 80, 650));
     settings_card->setGeometry((overlay_size.width() - card_size.width()) / 2,
-                               (overlay_size.height() - card_size.height()) / 2,
-                               card_size.width(), card_size.height());
+                               (overlay_size.height() - card_size.height()) / 2, card_size.width(),
+                               card_size.height());
 }
 
 // The in-game Home button floats directly over the running game rather than inside any themed
@@ -3509,8 +3511,8 @@ void GMainWindow::ApplyOverlayButtonTheme() {
     Settings::values.bg_blue = bg;
 
 #ifdef Q_OS_MAC
-    const QString home_icon_path =
-        QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/home_icons/home.png");
+    const QString home_icon_path = QCoreApplication::applicationDirPath() +
+                                   QStringLiteral("/../Resources/home_icons/home.png");
 #else
     const QString home_icon_path =
         QCoreApplication::applicationDirPath() + QStringLiteral("/home_icons/home.png");
@@ -3545,10 +3547,8 @@ void GMainWindow::RepositionHomeButton() {
     }
     constexpr int Margin = 16;
     const QRect area = ui->centralwidget->rect();
-    home_button->move(area.left() + Margin,
-                      area.bottom() - home_button->height() - Margin);
+    home_button->move(area.left() + Margin, area.bottom() - home_button->height() - Margin);
 }
-
 
 void GMainWindow::RepositionScreenDivider() {
     if (!screen_divider || !render_window || !emulation_running) {
@@ -4497,7 +4497,8 @@ bool GMainWindow::eventFilter(QObject* watched, QEvent* event) {
             break;
         case QEvent::Leave:
             if (!dragging_screen_divider) {
-                screen_divider->setStyleSheet(QStringLiteral("background-color: rgba(10, 132, 255, 0);"));
+                screen_divider->setStyleSheet(
+                    QStringLiteral("background-color: rgba(10, 132, 255, 0);"));
             }
             break;
         case QEvent::MouseButtonPress:
@@ -4505,15 +4506,16 @@ bool GMainWindow::eventFilter(QObject* watched, QEvent* event) {
             break;
         case QEvent::MouseButtonRelease:
             dragging_screen_divider = false;
-            screen_divider->setStyleSheet(QStringLiteral("background-color: rgba(10, 132, 255, 0);"));
+            screen_divider->setStyleSheet(
+                QStringLiteral("background-color: rgba(10, 132, 255, 0);"));
             break;
         case QEvent::MouseMove:
             if (dragging_screen_divider) {
                 auto* mouse_event = static_cast<QMouseEvent*>(event);
                 const QPoint global_pos = screen_divider->mapToGlobal(mouse_event->pos());
                 const QPoint local_to_render = render_window->mapFromGlobal(global_pos);
-                const double ratio = static_cast<double>(local_to_render.y()) /
-                                     std::max(1, render_window->height());
+                const double ratio =
+                    static_cast<double>(local_to_render.y()) / std::max(1, render_window->height());
                 custom_screen_split_ratio = std::clamp(ratio, 0.15, 0.85);
                 UpdateScreenSplitFromRatio(custom_screen_split_ratio);
                 RepositionScreenDivider();
@@ -5083,8 +5085,8 @@ void GMainWindow::UpdateWindowTitle() {
         setWindowTitle(QStringLiteral("Extendo %1").arg(full_name));
     } else {
         setWindowTitle(QStringLiteral("Extendo %1 | %2").arg(full_name, game_title));
-        render_window->setWindowTitle(
-            QStringLiteral("Extendo %1 | %2 | %3").arg(full_name, game_title, tr("Primary Window")));
+        render_window->setWindowTitle(QStringLiteral("Extendo %1 | %2 | %3")
+                                          .arg(full_name, game_title, tr("Primary Window")));
         secondary_window->setWindowTitle(QStringLiteral("Extendo %1 | %2 | %3")
                                              .arg(full_name, game_title, tr("Secondary Window")));
     }

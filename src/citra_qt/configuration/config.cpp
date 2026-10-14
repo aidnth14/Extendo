@@ -1391,12 +1391,13 @@ void QtConfig::SaveUIValues() {
     if (global) {
         WriteSetting(Settings::QKeys::theme, UISettings::values.theme,
                      QString::fromUtf8(UISettings::themes[0].second));
-        WriteSetting(QStringLiteral("home_background_path"), UISettings::values.home_background_path,
-                     QString());
+        WriteSetting(QStringLiteral("home_background_path"),
+                     UISettings::values.home_background_path, QString());
         WriteSetting(QStringLiteral("home_font_family"), UISettings::values.home_font_family,
                      QString());
         WriteSetting(QStringLiteral("home_font_size"), UISettings::values.home_font_size, 10);
-        WriteSetting(QStringLiteral("home_pill_position"), UISettings::values.home_pill_position, 0);
+        WriteSetting(QStringLiteral("home_pill_position"), UISettings::values.home_pill_position,
+                     0);
 #ifdef ENABLE_DISCORD_RPC
         WriteBasicSetting(UISettings::values.enable_discord_presence);
 #endif

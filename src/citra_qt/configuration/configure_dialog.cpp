@@ -98,10 +98,10 @@ void ConfigureDialog::SetActiveTab(int index) {
     // Callers still pass the legacy tabWidget index; map it to the page widget and select the
     // matching row in the flattened single-column list (which drives UpdateVisibleTabs).
     const std::array<QWidget*, 14> legacy_order{
-        general_tab.get(),    system_tab.get(),  input_tab.get(),  hotkeys_controller_tab.get(),
-        hotkeys_tab.get(),    graphics_tab.get(), enhancements_tab.get(), layout_tab.get(),
-        audio_tab.get(),      camera_tab.get(),  debug_tab.get(),  storage_tab.get(),
-        web_tab.get(),        ui_tab.get()};
+        general_tab.get(), system_tab.get(),   input_tab.get(),        hotkeys_controller_tab.get(),
+        hotkeys_tab.get(), graphics_tab.get(), enhancements_tab.get(), layout_tab.get(),
+        audio_tab.get(),   camera_tab.get(),   debug_tab.get(),        storage_tab.get(),
+        web_tab.get(),     ui_tab.get()};
     if (index < 0 || index >= static_cast<int>(legacy_order.size())) {
         index = 0;
     }

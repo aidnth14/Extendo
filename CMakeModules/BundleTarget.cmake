@@ -120,6 +120,11 @@ if (BUNDLE_TARGET_EXECUTE)
         # Set up app icon
         file(COPY_FILE "${source_path}/dist/azahar.svg" "${CMAKE_BINARY_DIR}/dist/org.azahar_emu.Azahar.svg")
 
+        set(desktop_file "${source_path}/dist/${executable_name}.desktop")
+        if (NOT EXISTS "${desktop_file}")
+            set(desktop_file "${source_path}/dist/azahar.desktop")
+        endif()
+
         message(STATUS "Creating AppDir for executable ${executable_path}")
         execute_process(COMMAND ${CMAKE_COMMAND} -E env
             ${extra_linuxdeploy_env}
@@ -128,7 +133,7 @@ if (BUNDLE_TARGET_EXECUTE)
             --plugin checkrt
             --executable "${executable_path}"
             --icon-file "${CMAKE_BINARY_DIR}/dist/org.azahar_emu.Azahar.svg"
-            --desktop-file "${source_path}/dist/${executable_name}.desktop"
+            --desktop-file "${desktop_file}"
             --appdir "${appdir_path}"
             RESULT_VARIABLE linuxdeploy_appdir_result
             ERROR_VARIABLE linuxdeploy_appdir_error)

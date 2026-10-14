@@ -10,7 +10,7 @@ background, and an in-window settings popup.
 *Extendo is not affiliated with or endorsed by Nintendo. This fork is not affiliated with the
 upstream Azahar project.*
 
-Repo: https://github.com/yuske014/azahar-switch-ui
+Repo: https://github.com/yuske014/Extendo
 
 ---
 
@@ -31,8 +31,8 @@ your OS.
 ## 1. Clone the repo (same on every OS)
 
 ```sh
-git clone https://github.com/yuske014/azahar-switch-ui.git azahar
-cd azahar
+git clone https://github.com/yuske014/Extendo.git extendo
+cd extendo
 git submodule update --init --recursive
 ```
 

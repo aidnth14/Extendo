@@ -89,8 +89,7 @@ void ConfigureUi::ApplyConfiguration() {
     UISettings::values.game_list_single_line_mode = ui->toggle_single_line_mode->isChecked();
     UISettings::values.show_advanced_frametime_info = ui->show_advanced_frametime_info->isChecked();
     UISettings::values.home_pill_position =
-        ui->home_pill_position_combobox
-            ->itemData(ui->home_pill_position_combobox->currentIndex())
+        ui->home_pill_position_combobox->itemData(ui->home_pill_position_combobox->currentIndex())
             .toInt();
 }
 

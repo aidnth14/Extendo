@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -18,22 +19,21 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPropertyAnimation>
-#include <QScrollBar>
-#include <QWheelEvent>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSettings>
-#include <QEvent>
-#include <QMouseEvent>
 #include <QStandardItemModel>
 #include <QStyledItemDelegate>
 #include <QTextStream>
 #include <QTimer>
 #include <QToolButton>
-#include <QVariantAnimation>
 #include <QVBoxLayout>
+#include <QVariantAnimation>
+#include <QWheelEvent>
 #include "citra_qt/game_list_p.h"
 #include "citra_qt/home_screen.h"
 #include "citra_qt/uisettings.h"
@@ -80,20 +80,20 @@ QImage SharpenImage(const QImage& input) {
             const QRgb center = row_curr[x];
             for (int channel = 0; channel < 3; ++channel) {
                 const int c = (channel == 0)   ? qRed(center)
-                             : (channel == 1) ? qGreen(center)
-                                              : qBlue(center);
-                const int up = (channel == 0)    ? qRed(row_prev[x])
-                              : (channel == 1)   ? qGreen(row_prev[x])
-                                                 : qBlue(row_prev[x]);
-                const int down = (channel == 0)  ? qRed(row_next[x])
-                                : (channel == 1) ? qGreen(row_next[x])
-                                                 : qBlue(row_next[x]);
-                const int left = (channel == 0)  ? qRed(row_curr[x - 1])
-                                : (channel == 1) ? qGreen(row_curr[x - 1])
-                                                 : qBlue(row_curr[x - 1]);
-                const int right = (channel == 0)  ? qRed(row_curr[x + 1])
-                                 : (channel == 1) ? qGreen(row_curr[x + 1])
-                                                  : qBlue(row_curr[x + 1]);
+                              : (channel == 1) ? qGreen(center)
+                                               : qBlue(center);
+                const int up = (channel == 0)   ? qRed(row_prev[x])
+                               : (channel == 1) ? qGreen(row_prev[x])
+                                                : qBlue(row_prev[x]);
+                const int down = (channel == 0)   ? qRed(row_next[x])
+                                 : (channel == 1) ? qGreen(row_next[x])
+                                                  : qBlue(row_next[x]);
+                const int left = (channel == 0)   ? qRed(row_curr[x - 1])
+                                 : (channel == 1) ? qGreen(row_curr[x - 1])
+                                                  : qBlue(row_curr[x - 1]);
+                const int right = (channel == 0)   ? qRed(row_curr[x + 1])
+                                  : (channel == 1) ? qGreen(row_curr[x + 1])
+                                                   : qBlue(row_curr[x + 1]);
                 const int sharpened = qBound(0, c * 5 - up - down - left - right, 255);
                 if (channel == 0) {
                     out_row[x] = qRgba(sharpened, qGreen(center), qBlue(center), qAlpha(center));
@@ -134,10 +134,9 @@ qreal AverageLuminance(const QPixmap& pixmap) {
     if (pixmap.isNull()) {
         return 0.0;
     }
-    const QImage image =
-        pixmap.scaled(16, 16, Qt::IgnoreAspectRatio, Qt::FastTransformation)
-            .toImage()
-            .convertToFormat(QImage::Format_RGB32);
+    const QImage image = pixmap.scaled(16, 16, Qt::IgnoreAspectRatio, Qt::FastTransformation)
+                             .toImage()
+                             .convertToFormat(QImage::Format_RGB32);
     double sum = 0.0;
     int count = 0;
     for (int y = 0; y < image.height(); ++y) {
@@ -231,9 +230,8 @@ QPixmap RoundedPixmap(const QPixmap& source, int size, int radius, qreal dpr = 1
     QPainterPath path;
     path.addRoundedRect(0, 0, size, size, radius, radius);
     painter.setClipPath(path);
-    painter.drawPixmap(QPointF((size - scaled.width() / dpr) / 2.0,
-                               (size - scaled.height() / dpr) / 2.0),
-                       scaled);
+    painter.drawPixmap(
+        QPointF((size - scaled.width() / dpr) / 2.0, (size - scaled.height() / dpr) / 2.0), scaled);
     return rounded;
 }
 
@@ -580,8 +578,7 @@ public:
     /// trailing "+" tile apart from real games so it can skip the hover border).
     static constexpr int AddTileRole = Qt::UserRole + 100;
 
-    explicit TileHoverDelegate(QListWidget* view)
-        : QStyledItemDelegate(view), tile_list(view) {
+    explicit TileHoverDelegate(QListWidget* view) : QStyledItemDelegate(view), tile_list(view) {
         animation.setDuration(140);
         animation.setEasingCurve(QEasingCurve::OutCubic);
         QObject::connect(&animation, &QVariantAnimation::valueChanged, view,
@@ -632,7 +629,7 @@ public:
     }
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option,
-              const QModelIndex& index) const override {
+               const QModelIndex& index) const override {
         // Only the live-hovered tile gets emphasis. Qt's native State_Selected persists on
         // whatever was last clicked even after the pointer moves elsewhere, which would show
         // two highlighted tiles at once (the old selection and the new hover) if used here.
@@ -694,8 +691,8 @@ public:
                 title_font.setPointSizeF(title_font.pointSizeF() * 1.6);
                 title_font.setWeight(QFont::Bold);
                 painter->setFont(title_font);
-                const QString elided = painter->fontMetrics().elidedText(
-                    title, Qt::ElideRight, title_rect.width() - 4);
+                const QString elided = painter->fontMetrics().elidedText(title, Qt::ElideRight,
+                                                                         title_rect.width() - 4);
                 painter->drawText(title_rect, Qt::AlignHCenter | Qt::AlignVCenter, elided);
             }
         }
@@ -718,8 +715,8 @@ static int TileCellWidth(int icon_size) {
 }
 
 static int TileCellHeight(int icon_size) {
-    return icon_size + TileHoverDelegate::HoverPadding * 2 +
-           TileHoverDelegate::TitleStripHeight + TileHoverDelegate::TitleGap;
+    return icon_size + TileHoverDelegate::HoverPadding * 2 + TileHoverDelegate::TitleStripHeight +
+           TileHoverDelegate::TitleGap;
 }
 
 // Stored as plain tab-separated "game_path\tcover_path" lines rather than QSettings/INI,
@@ -863,8 +860,8 @@ void HomeScreenWidget::UpdateTextColorForBackground() {
         tile_hover_delegate->SetTextColor(home_text_color);
     }
     ApplyCombinedStylesheet();
-    UpdateBattery();     // the icon is painted, so it needs re-rendering in the new colour
-    UpdateLegendBar();   // ditto for the legend's glyph badges
+    UpdateBattery();   // the icon is painted, so it needs re-rendering in the new colour
+    UpdateLegendBar(); // ditto for the legend's glyph badges
     // The "+" add-directory tile is a painted pixmap, not QSS, so repaint it with the new color.
     // Guarded by the early-return above, this can't loop (Refresh doesn't change the color).
     if (tile_list) {
@@ -940,8 +937,7 @@ void HomeScreenWidget::SetupUi() {
     tile_list->setResizeMode(QListWidget::Adjust);
     tile_list->setMovement(QListWidget::Static);
     tile_list->setIconSize(QSize(tile_icon_size, tile_icon_size));
-    tile_list->setGridSize(QSize(TileCellWidth(tile_icon_size),
-                                 TileCellHeight(tile_icon_size)));
+    tile_list->setGridSize(QSize(TileCellWidth(tile_icon_size), TileCellHeight(tile_icon_size)));
     tile_list->setSpacing(TileSpacing);
     tile_list->setUniformItemSizes(true);
     tile_list->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -959,9 +955,8 @@ void HomeScreenWidget::SetupUi() {
     tile_hover_delegate = new TileHoverDelegate(tile_list);
     tile_list->setItemDelegate(tile_hover_delegate);
     tile_list->viewport()->installEventFilter(this);
-    connect(tile_list, &QListWidget::entered, this, [this](const QModelIndex& index) {
-        tile_hover_delegate->SetHoveredIndex(index);
-    });
+    connect(tile_list, &QListWidget::entered, this,
+            [this](const QModelIndex& index) { tile_hover_delegate->SetHoveredIndex(index); });
 
     // Console-style activation: a single click launches, matching the Switch home menu. Qt's
     // itemActivated only fires on the platform's double-click gesture, so itemClicked is the
@@ -1007,8 +1002,8 @@ void HomeScreenWidget::SetupUi() {
     // The buttons are a fixed 51px inside a 61px-thick pill, so without an explicit alignment
     // they settle against the top-left corner of their slot instead of sitting on the pill's
     // centre line. AlignCenter keeps them centred in whichever direction the dock is running.
-    for (auto* button : {profile_button, settings_button, add_dir_button, wallpaper_button,
-                         power_button}) {
+    for (auto* button :
+         {profile_button, settings_button, add_dir_button, wallpaper_button, power_button}) {
         pill_layout->addWidget(button, 0, Qt::AlignCenter);
     }
 
@@ -1042,8 +1037,8 @@ void HomeScreenWidget::UpdateLegendBar() {
     }
     // Same harmony rule as the dock: knock the letter out in the inverse of the glyph colour,
     // which is itself derived from the wallpaper — so the badges never end up dark-on-dark.
-    const QColor surface = home_text_color == QColor(Qt::black) ? QColor(0xff, 0xff, 0xff)
-                                                                : QColor(0x16, 0x18, 0x1d);
+    const QColor surface =
+        home_text_color == QColor(Qt::black) ? QColor(0xff, 0xff, 0xff) : QColor(0x16, 0x18, 0x1d);
     for (QLabel* glyph : legend_bar->findChildren<QLabel*>(QStringLiteral("legendGlyph"))) {
         glyph->setPixmap(RenderGlyphBadge(glyph->property("letter").toString(), home_text_color,
                                           surface, devicePixelRatioF()));
@@ -1145,8 +1140,8 @@ void HomeScreenWidget::paintEvent(QPaintEvent* event) {
         // Solid theme base fill: white for the custom White theme, dark for everything else.
         QPainter base_painter(this);
         // Taste rule 2: same base hue the settings panel and palette are derived from.
-        base_painter.fillRect(rect(), IsWhiteTheme() ? QColor(0xff, 0xff, 0xff)
-                                                     : QColor(0x16, 0x18, 0x1d));
+        base_painter.fillRect(rect(),
+                              IsWhiteTheme() ? QColor(0xff, 0xff, 0xff) : QColor(0x16, 0x18, 0x1d));
     }
     if (!background_scaled.isNull()) {
         QPainter painter(this);
@@ -1190,8 +1185,8 @@ void HomeScreenWidget::RebuildScaledBackground() {
     // How far past its native size the source has to stretch to fill the window.
     const qreal upscale = qMax(qreal(target.width()) / qMax(1, background_pixmap.width()),
                                qreal(target.height()) / qMax(1, background_pixmap.height()));
-    QPixmap scaled = background_pixmap.scaled(target, Qt::KeepAspectRatioByExpanding,
-                                              Qt::SmoothTransformation);
+    QPixmap scaled =
+        background_pixmap.scaled(target, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
     if (upscale > 1.6) {
         // Blur in proportion to how badly the image is being stretched, capped so a very small
         // source doesn't turn into a featureless smear.
@@ -1271,8 +1266,7 @@ void HomeScreenWidget::UpdateBattery() {
         return;
     }
     const BatteryState state = ReadBatteryState();
-    battery_label->setPixmap(
-        RenderBatteryIcon(state, home_text_color, devicePixelRatioF()));
+    battery_label->setPixmap(RenderBatteryIcon(state, home_text_color, devicePixelRatioF()));
     // Taste rule 7: the status cluster stays quiet, so the percentage rides beside the pill at
     // a smaller size rather than competing with the clock.
     battery_percent_label->setText(QStringLiteral("%1%").arg(state.percent));
@@ -1288,16 +1282,14 @@ void HomeScreenWidget::UpdateTileIconSizeForWidth(int available_width) {
     const int usable = qMax(available_width - 32, MinTileIconSize);
     // Subtract the per-tile chrome (hover slack + spacing) so the icon size that comes out is
     // what actually fits once the full cell footprint is accounted for.
-    int candidate =
-        usable / count - TileSpacing * 2 - TileHoverDelegate::HoverPadding * 2;
+    int candidate = usable / count - TileSpacing * 2 - TileHoverDelegate::HoverPadding * 2;
     candidate = qBound(MinTileIconSize, candidate, MaxTileIconSize);
     if (candidate == tile_icon_size) {
         return;
     }
     tile_icon_size = candidate;
     tile_list->setIconSize(QSize(tile_icon_size, tile_icon_size));
-    tile_list->setGridSize(QSize(TileCellWidth(tile_icon_size),
-                                 TileCellHeight(tile_icon_size)));
+    tile_list->setGridSize(QSize(TileCellWidth(tile_icon_size), TileCellHeight(tile_icon_size)));
     tile_list->setFixedHeight(TileCellHeight(tile_icon_size) + TileSpacing * 2);
     Refresh(); // Re-render icons at the new size instead of just stretching the old pixmaps.
 }
@@ -1404,9 +1396,9 @@ void HomeScreenWidget::Refresh() {
 }
 
 void HomeScreenWidget::OnChooseWallpaper() {
-    const QString image_path = QFileDialog::getOpenFileName(
-        this, tr("Select Background Image"), QString(),
-        tr("Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff)"));
+    const QString image_path =
+        QFileDialog::getOpenFileName(this, tr("Select Background Image"), QString(),
+                                     tr("Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff)"));
     if (image_path.isEmpty()) {
         return;
     }
@@ -1444,10 +1436,8 @@ void HomeScreenWidget::OnTileContextMenu(const QPoint& pos) {
             const QString covers_dir = UserDataDir() + QStringLiteral("covers/");
             QDir().mkpath(covers_dir);
             const QString ext = QFileInfo(image_path).suffix();
-            const QString stored_path =
-                covers_dir +
-                QString::number(qHash(full_path), 16) +
-                (ext.isEmpty() ? QString() : QStringLiteral(".") + ext);
+            const QString stored_path = covers_dir + QString::number(qHash(full_path), 16) +
+                                        (ext.isEmpty() ? QString() : QStringLiteral(".") + ext);
             QFile::remove(stored_path);
             QFile::copy(image_path, stored_path);
             custom_covers.insert(full_path, stored_path);

@@ -27,7 +27,11 @@ cmake .. -G Ninja \
     -DENABLE_DISCORD_RPC=ON \
     "${EXTRA_CMAKE_FLAGS[@]}"
 ninja
-strip -s bin/Release/*
+for bin in bin/Release/*; do
+    if [ -f "$bin" ]; then
+        strip -s "$bin" 2>/dev/null || true
+    fi
+done
 
 if [ "$TARGET" == "appimage" ]; then
     ninja bundle
