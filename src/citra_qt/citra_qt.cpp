@@ -3812,28 +3812,10 @@ void GMainWindow::ShowProfileOverlay() {
         "background-color: #D2D2D2; border: none; height: 1px; min-height: 1px; max-height: 1px;"));
     dialog_layout->addWidget(bottom_line);
 
-    // Footer with Console Badge and Back/OK action buttons
+    // Footer with Back/OK action buttons
     auto* footer_widget = new QWidget(dialog);
     auto* footer_layout = new QHBoxLayout(footer_widget);
     footer_layout->setContentsMargins(36, 10, 36, 12);
-
-    auto* console_label = new QLabel(footer_widget);
-    QString console_badge_path =
-        QCoreApplication::applicationDirPath() +
-        QStringLiteral("/../Resources/home_icons/console_badge.png");
-    if (!QFile::exists(console_badge_path)) {
-        console_badge_path = QStringLiteral(
-            "/Users/shoroz/Downloads/azahar-src/dist/home_screen_icons/console_badge.png");
-    }
-    if (QFile::exists(console_badge_path)) {
-        QPixmap c_pix(console_badge_path);
-        if (!c_pix.isNull()) {
-            console_label->setPixmap(
-                c_pix.scaled(58, 26, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        }
-    }
-    console_label->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
-    footer_layout->addWidget(console_label);
     footer_layout->addStretch();
 
     auto* button_box =
