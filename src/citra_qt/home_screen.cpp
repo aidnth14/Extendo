@@ -1107,8 +1107,9 @@ void HomeScreenWidget::SetupUi() {
     pill_layout = new QBoxLayout(QBoxLayout::LeftToRight, pill_bar);
     pill_layout->setSpacing(6);
 
-    auto* profile_button =
+    profile_button =
         MakeIconPillButton(HomeIconPath(QStringLiteral("profile.png")), tr("Profile"), pill_bar);
+    UpdateProfileButtonIcon();
     auto* settings_button =
         MakeIconPillButton(HomeIconPath(QStringLiteral("settings.png")), tr("Settings"), pill_bar);
     auto* add_dir_button = MakeIconPillButton(HomeIconPath(QStringLiteral("adddir.png")),
@@ -1262,7 +1263,77 @@ void HomeScreenWidget::ApplyAppearanceSettings() {
 
     ApplyPillBarPlacement(); // dock side is an appearance setting too
     UpdateLegendBar();
+    UpdateProfileButtonIcon();
     update();
+}
+
+void HomeScreenWidget::UpdateProfileButtonIcon() {
+    if (!profile_button) {
+        return;
+    }
+    constexpr int CanvasSize = 36;
+    const qreal dpr = devicePixelRatioF();
+
+    const QString& custom_path = UISettings::values.profile_avatar_path;
+    if (!custom_path.isEmpty() && QFile::exists(custom_path)) {
+        QImage src_img(custom_path);
+        if (!src_img.isNull()) {
+            if (src_img.format() != QImage::Format_ARGB32_Premultiplied) {
+                src_img = src_img.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            }
+            const int min_dim = qMin(src_img.width(), src_img.height());
+            const int sx = (src_img.width() - min_dim) / 2;
+            const int sy = (src_img.height() - min_dim) / 2;
+            QImage square = src_img.copy(sx, sy, min_dim, min_dim);
+
+            QImage scaled = square.scaled(qRound(CanvasSize * dpr), qRound(CanvasSize * dpr),
+                                          Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+
+            QPixmap canvas(qRound(CanvasSize * dpr), qRound(CanvasSize * dpr));
+            canvas.setDevicePixelRatio(dpr);
+            canvas.fill(Qt::transparent);
+
+            QPainter painter(&canvas);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            QPainterPath circle_path;
+            circle_path.addEllipse(QRectF(0, 0, CanvasSize, CanvasSize));
+            painter.setClipPath(circle_path);
+            QPixmap scaled_pix = QPixmap::fromImage(scaled);
+            scaled_pix.setDevicePixelRatio(dpr);
+            painter.drawPixmap(0, 0, scaled_pix);
+
+            profile_button->setIcon(QIcon(canvas));
+            profile_button->setIconSize(QSize(CanvasSize, CanvasSize));
+            return;
+        }
+    }
+
+    QImage source_image(HomeIconPath(QStringLiteral("profile.png")));
+    QPixmap canvas(qRound(CanvasSize * dpr), qRound(CanvasSize * dpr));
+    canvas.setDevicePixelRatio(dpr);
+    canvas.fill(Qt::transparent);
+    if (!source_image.isNull()) {
+        if (source_image.format() != QImage::Format_ARGB32) {
+            source_image = source_image.convertToFormat(QImage::Format_ARGB32);
+        }
+        constexpr int ContentSize = 26;
+        const QRect bounds = OpaqueBounds(source_image);
+        if (bounds.isValid()) {
+            source_image = source_image.copy(bounds);
+        }
+        QImage scaled = source_image.scaled(qRound(ContentSize * dpr), qRound(ContentSize * dpr),
+                                            Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        QPixmap scaled_logical = QPixmap::fromImage(scaled);
+        scaled_logical.setDevicePixelRatio(dpr);
+        QPainter painter(&canvas);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        painter.drawPixmap(QPointF((CanvasSize - scaled_logical.width() / dpr) / 2.0,
+                                   (CanvasSize - scaled_logical.height() / dpr) / 2.0),
+                           scaled_logical);
+    }
+    profile_button->setIcon(QIcon(canvas));
+    profile_button->setIconSize(QSize(CanvasSize, CanvasSize));
 }
 
 void HomeScreenWidget::OnBackgroundMovieFrame() {

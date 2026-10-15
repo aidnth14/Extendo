@@ -78,6 +78,8 @@ private:
     /// Recomputes home_text_color from the current background's brightness and reapplies it.
     void UpdateTextColorForBackground();
     void ApplyCombinedStylesheet();
+    /// Updates the dock profile button icon from custom profile avatar or default icon.
+    void UpdateProfileButtonIcon();
 
     static constexpr int TileIconSize = 150;
 
@@ -93,6 +95,7 @@ private:
     QLabel* title_label = nullptr;
     QWidget* pill_bar = nullptr;
     QBoxLayout* pill_layout = nullptr;
+    QToolButton* profile_button = nullptr;
     QWidget* empty_state_container = nullptr;
     QWidget* populated_container = nullptr;
     QToolButton* large_add_button = nullptr;

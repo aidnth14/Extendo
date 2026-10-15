@@ -117,6 +117,7 @@
 #include "core/file_sys/archive_source_sd_savedata.h"
 #include "core/frontend/applets/default_applets.h"
 #include "core/hle/service/am/am.h"
+#include "core/hle/service/cfg/cfg.h"
 #include "core/hle/service/fs/archive.h"
 #include "core/hle/service/nfc/nfc.h"
 #include "core/loader/loader.h"
@@ -3564,42 +3565,282 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
             });
 }
 
+static QPixmap MakeRoundedPixmap(const QPixmap& src, const QSize& size, int radius) {
+    if (src.isNull()) {
+        return QPixmap();
+    }
+    QPixmap scaled = src.scaled(size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    const int x = qMax(0, (scaled.width() - size.width()) / 2);
+    const int y = qMax(0, (scaled.height() - size.height()) / 2);
+    QPixmap cropped = scaled.copy(x, y, size.width(), size.height());
+
+    QPixmap dest(size);
+    dest.fill(Qt::transparent);
+    QPainter painter(&dest);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    QPainterPath path;
+    path.addRoundedRect(QRectF(0, 0, size.width(), size.height()), radius, radius);
+    painter.setClipPath(path);
+    painter.drawPixmap(0, 0, cropped);
+    return dest;
+}
+
 void GMainWindow::ShowProfileOverlay() {
     if (settings_overlay) {
         settings_overlay->raise();
         return;
     }
 
-    const bool white = UISettings::values.theme == QStringLiteral("white");
-    const QColor base = white ? QColor(0xff, 0xff, 0xff) : QColor(0x16, 0x18, 0x1d);
-    const QColor toward = white ? QColor(0, 0, 0) : QColor(0xff, 0xff, 0xff);
-    const auto tint = [&base, &toward](qreal amount) {
-        return QColor(qRound(base.red() + (toward.red() - base.red()) * amount),
-                      qRound(base.green() + (toward.green() - base.green()) * amount),
-                      qRound(base.blue() + (toward.blue() - base.blue()) * amount))
-            .name();
+    auto get_avatar_pixmap = [](const QSize& size, int radius) -> QPixmap {
+        QPixmap src;
+        if (!UISettings::values.profile_avatar_path.isEmpty() &&
+            QFile::exists(UISettings::values.profile_avatar_path)) {
+            src.load(UISettings::values.profile_avatar_path);
+        }
+        if (src.isNull()) {
+            const QString default_icon =
+                QCoreApplication::applicationDirPath() +
+                QStringLiteral("/../Resources/home_icons/default_avatar.png");
+            if (QFile::exists(default_icon)) {
+                src.load(default_icon);
+            } else {
+                src.load(QStringLiteral(
+                    "/Users/shoroz/Downloads/azahar-src/dist/home_screen_icons/default_avatar.png"));
+            }
+        }
+        if (src.isNull()) {
+            src = QPixmap(size);
+            src.fill(QColor(0x28, 0xbf, 0x28));
+        }
+        return MakeRoundedPixmap(src, size, radius);
     };
 
-    const QString bg = base.name();
-    const QString text = tint(0.92);
-    const QString hover = tint(0.07);
-    const QString border = tint(0.13);
+    auto get_current_nickname = [this]() -> QString {
+        if (!UISettings::values.profile_nickname.trimmed().isEmpty()) {
+            return UISettings::values.profile_nickname;
+        }
+        auto cfg = Service::CFG::GetModule(system);
+        if (cfg) {
+            QString cfg_name = QString::fromStdU16String(cfg->GetUsername()).trimmed();
+            if (!cfg_name.isEmpty()) {
+                return cfg_name;
+            }
+        }
+        return QStringLiteral("Me");
+    };
 
     auto* dialog = new QDialog();
     dialog->setObjectName(QStringLiteral("profileDialog"));
     dialog->setWindowFlags(Qt::Widget);
 
     auto* dialog_layout = new QVBoxLayout(dialog);
-    dialog_layout->setContentsMargins(24, 24, 24, 16);
-    dialog_layout->addStretch();
+    dialog_layout->setContentsMargins(0, 0, 0, 0);
+    dialog_layout->setSpacing(0);
+
+    // Header: "User Settings"
+    auto* header_widget = new QWidget(dialog);
+    auto* header_layout = new QVBoxLayout(header_widget);
+    header_layout->setContentsMargins(36, 22, 36, 12);
+    auto* title_label = new QLabel(tr("User Settings"), header_widget);
+    title_label->setStyleSheet(QStringLiteral(
+        "font-size: 22px; font-weight: 600; color: #2C2C2C; border: none; background: transparent;"));
+    header_layout->addWidget(title_label);
+    dialog_layout->addWidget(header_widget);
+
+    // Top horizontal separator line
+    auto* top_line = new QFrame(dialog);
+    top_line->setFrameShape(QFrame::HLine);
+    top_line->setFrameShadow(QFrame::Plain);
+    top_line->setStyleSheet(QStringLiteral(
+        "background-color: #D2D2D2; border: none; height: 1px; min-height: 1px; max-height: 1px;"));
+    dialog_layout->addWidget(top_line);
+
+    // Main Content: Two Columns
+    auto* content_widget = new QWidget(dialog);
+    auto* content_layout = new QHBoxLayout(content_widget);
+    content_layout->setContentsMargins(44, 24, 44, 20);
+    content_layout->setSpacing(48);
+
+    // Left Column: Avatar + Nickname
+    auto* left_col = new QWidget(content_widget);
+    left_col->setFixedWidth(200);
+    auto* left_layout = new QVBoxLayout(left_col);
+    left_layout->setContentsMargins(0, 0, 0, 0);
+    left_layout->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
+
+    auto* avatar_label = new QLabel(left_col);
+    avatar_label->setFixedSize(160, 160);
+    avatar_label->setPixmap(get_avatar_pixmap(QSize(160, 160), 8));
+    avatar_label->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+    left_layout->addWidget(avatar_label, 0, Qt::AlignHCenter);
+
+    left_layout->addSpacing(14);
+    auto* nickname_display = new QLabel(get_current_nickname(), left_col);
+    nickname_display->setAlignment(Qt::AlignCenter);
+    nickname_display->setStyleSheet(QStringLiteral(
+        "font-size: 18px; font-weight: 600; color: #2C2C2C; border: none; background: transparent;"));
+    left_layout->addWidget(nickname_display, 0, Qt::AlignHCenter);
+    left_layout->addStretch();
+    content_layout->addWidget(left_col);
+
+    // Right Column: Profile Settings, Nickname, Edit Icon, Link Account, Delete User
+    auto* right_col = new QWidget(content_widget);
+    auto* right_layout = new QVBoxLayout(right_col);
+    right_layout->setContentsMargins(0, 0, 0, 0);
+    right_layout->setSpacing(0);
+
+    // Section title with vertical accent bar
+    auto* sec_widget = new QWidget(right_col);
+    auto* sec_layout = new QHBoxLayout(sec_widget);
+    sec_layout->setContentsMargins(0, 0, 0, 10);
+    sec_layout->setSpacing(8);
+    auto* accent_bar = new QFrame(sec_widget);
+    accent_bar->setFixedSize(3, 18);
+    accent_bar->setStyleSheet(QStringLiteral(
+        "background-color: #2C2C2C; border-radius: 1px; border: none;"));
+    sec_layout->addWidget(accent_bar);
+    auto* sec_title = new QLabel(tr("Profile Settings"), sec_widget);
+    sec_title->setStyleSheet(QStringLiteral(
+        "font-size: 16px; font-weight: 600; color: #2C2C2C; border: none; background: transparent;"));
+    sec_layout->addWidget(sec_title);
+    sec_layout->addStretch();
+    right_layout->addWidget(sec_widget);
+
+    auto make_row_divider = [](QWidget* parent) {
+        auto* sep = new QFrame(parent);
+        sep->setFrameShape(QFrame::HLine);
+        sep->setStyleSheet(QStringLiteral(
+            "background-color: #D8D8D8; border: none; height: 1px; min-height: 1px; max-height: 1px;"));
+        return sep;
+    };
+
+    right_layout->addWidget(make_row_divider(right_col));
+
+    // Row 1: Nickname
+    auto* btn_nickname = new QPushButton(right_col);
+    btn_nickname->setFixedHeight(50);
+    btn_nickname->setCursor(Qt::PointingHandCursor);
+    btn_nickname->setStyleSheet(QStringLiteral(
+        "QPushButton { background: transparent; border: none; border-radius: 4px; padding: 0 8px; }"
+        "QPushButton:hover { background-color: rgba(0, 0, 0, 0.05); }"
+        "QPushButton:pressed { background-color: rgba(0, 0, 0, 0.09); }"));
+    auto* nick_layout = new QHBoxLayout(btn_nickname);
+    nick_layout->setContentsMargins(8, 0, 8, 0);
+    auto* lbl_nick_title = new QLabel(tr("Nickname"), btn_nickname);
+    lbl_nick_title->setStyleSheet(QStringLiteral(
+        "font-size: 16px; font-weight: 500; color: #2C2C2C; background: transparent; border: none;"));
+    nick_layout->addWidget(lbl_nick_title);
+    nick_layout->addStretch();
+    auto* val_nickname = new QLabel(get_current_nickname(), btn_nickname);
+    val_nickname->setStyleSheet(QStringLiteral(
+        "font-size: 16px; font-weight: 600; color: #2D55FA; background: transparent; border: none;"));
+    nick_layout->addWidget(val_nickname);
+    right_layout->addWidget(btn_nickname);
+    right_layout->addWidget(make_row_divider(right_col));
+
+    // Row 2: Edit Icon
+    auto* btn_edit_icon = new QPushButton(right_col);
+    btn_edit_icon->setFixedHeight(50);
+    btn_edit_icon->setCursor(Qt::PointingHandCursor);
+    btn_edit_icon->setStyleSheet(QStringLiteral(
+        "QPushButton { background: transparent; border: none; border-radius: 4px; padding: 0 8px; }"
+        "QPushButton:hover { background-color: rgba(0, 0, 0, 0.05); }"
+        "QPushButton:pressed { background-color: rgba(0, 0, 0, 0.09); }"));
+    auto* icon_row_layout = new QHBoxLayout(btn_edit_icon);
+    icon_row_layout->setContentsMargins(8, 0, 8, 0);
+    auto* lbl_icon_title = new QLabel(tr("Edit Icon"), btn_edit_icon);
+    lbl_icon_title->setStyleSheet(QStringLiteral(
+        "font-size: 16px; font-weight: 500; color: #2C2C2C; background: transparent; border: none;"));
+    icon_row_layout->addWidget(lbl_icon_title);
+    icon_row_layout->addStretch();
+    auto* thumb_avatar = new QLabel(btn_edit_icon);
+    thumb_avatar->setFixedSize(36, 36);
+    thumb_avatar->setPixmap(get_avatar_pixmap(QSize(36, 36), 4));
+    thumb_avatar->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+    icon_row_layout->addWidget(thumb_avatar);
+    right_layout->addWidget(btn_edit_icon);
+    right_layout->addWidget(make_row_divider(right_col));
+
+    right_layout->addSpacing(22);
+    right_layout->addWidget(make_row_divider(right_col));
+
+    // Row 3: Link Extendo Account
+    auto* btn_link_account = new QPushButton(right_col);
+    btn_link_account->setFixedHeight(50);
+    btn_link_account->setCursor(Qt::PointingHandCursor);
+    btn_link_account->setStyleSheet(QStringLiteral(
+        "QPushButton { background: transparent; border: none; border-radius: 4px; padding: 0 8px; }"
+        "QPushButton:hover { background-color: rgba(0, 0, 0, 0.05); }"
+        "QPushButton:pressed { background-color: rgba(0, 0, 0, 0.09); }"));
+    auto* link_layout = new QHBoxLayout(btn_link_account);
+    link_layout->setContentsMargins(8, 0, 8, 0);
+    auto* lbl_link_title = new QLabel(tr("Link Extendo Account"), btn_link_account);
+    lbl_link_title->setStyleSheet(QStringLiteral(
+        "font-size: 16px; font-weight: 500; color: #2C2C2C; background: transparent; border: none;"));
+    link_layout->addWidget(lbl_link_title);
+    link_layout->addStretch();
+    auto* link_status = new QLabel(tr("Not Linked"), btn_link_account);
+    link_status->setStyleSheet(QStringLiteral(
+        "font-size: 15px; color: #888888; background: transparent; border: none;"));
+    link_layout->addWidget(link_status);
+    right_layout->addWidget(btn_link_account);
+    right_layout->addWidget(make_row_divider(right_col));
+
+    right_layout->addSpacing(22);
+
+    // Row 4: Delete User (Cyan bordered console focus box)
+    auto* btn_delete_user = new QPushButton(tr("  ◇ Delete User"), right_col);
+    btn_delete_user->setFixedHeight(54);
+    btn_delete_user->setCursor(Qt::PointingHandCursor);
+    btn_delete_user->setStyleSheet(QStringLiteral(
+        "QPushButton { background-color: #FFFFFF; border: 3px solid #00DEC8; border-radius: 4px;"
+        " color: #2C2C2C; font-size: 16px; font-weight: 600; text-align: left; padding-left: 20px; }"
+        "QPushButton:hover { background-color: #F4FFFE; border: 3px solid #00F4DC; }"
+        "QPushButton:pressed { background-color: #E8FAF8; }"));
+    right_layout->addWidget(btn_delete_user);
+
+    right_layout->addStretch();
+    content_layout->addWidget(right_col, 1);
+    dialog_layout->addWidget(content_widget, 1);
+
+    // Bottom horizontal separator line
+    auto* bottom_line = new QFrame(dialog);
+    bottom_line->setFrameShape(QFrame::HLine);
+    bottom_line->setFrameShadow(QFrame::Plain);
+    bottom_line->setStyleSheet(QStringLiteral(
+        "background-color: #D2D2D2; border: none; height: 1px; min-height: 1px; max-height: 1px;"));
+    dialog_layout->addWidget(bottom_line);
+
+    // Footer with Console Badge and Back/OK action buttons
+    auto* footer_widget = new QWidget(dialog);
+    auto* footer_layout = new QHBoxLayout(footer_widget);
+    footer_layout->setContentsMargins(36, 10, 36, 12);
+
+    auto* console_label = new QLabel(footer_widget);
+    QString console_badge_path =
+        QCoreApplication::applicationDirPath() +
+        QStringLiteral("/../Resources/home_icons/console_badge.png");
+    if (!QFile::exists(console_badge_path)) {
+        console_badge_path = QStringLiteral(
+            "/Users/shoroz/Downloads/azahar-src/dist/home_screen_icons/console_badge.png");
+    }
+    if (QFile::exists(console_badge_path)) {
+        QPixmap c_pix(console_badge_path);
+        if (!c_pix.isNull()) {
+            console_label->setPixmap(
+                c_pix.scaled(58, 26, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        }
+    }
+    console_label->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+    footer_layout->addWidget(console_label);
+    footer_layout->addStretch();
 
     auto* button_box =
-        new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, dialog);
+        new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, footer_widget);
     button_box->setObjectName(QStringLiteral("buttonBox"));
-    dialog_layout->addWidget(button_box);
-
     if (auto* cancel_button = button_box->button(QDialogButtonBox::Cancel)) {
-        cancel_button->setText(tr("Cancel"));
+        cancel_button->setText(tr("Back"));
         cancel_button->setIcon(MakeActionBadge(QStringLiteral("B"), QColor(0xe0, 0x3c, 0x3c)));
         cancel_button->setIconSize(QSize(22, 22));
     }
@@ -3608,22 +3849,87 @@ void GMainWindow::ShowProfileOverlay() {
         ok_button->setIcon(MakeActionBadge(QStringLiteral("A"), QColor(0x3c, 0x8c, 0xe0)));
         ok_button->setIconSize(QSize(22, 22));
     }
+    footer_layout->addWidget(button_box);
+    dialog_layout->addWidget(footer_widget);
+
+    // Connections for functionality
+    connect(btn_nickname, &QPushButton::clicked, this,
+            [this, dialog, val_nickname, nickname_display, get_current_nickname] {
+                bool ok = false;
+                const QString cur = get_current_nickname();
+                const QString text = QInputDialog::getText(
+                    dialog, tr("Nickname"), tr("Enter a nickname (up to 10 characters):"),
+                    QLineEdit::Normal, cur, &ok);
+                if (ok && !text.trimmed().isEmpty()) {
+                    const QString trimmed = text.trimmed().left(10);
+                    UISettings::values.profile_nickname = trimmed;
+                    config->Save();
+                    auto cfg = Service::CFG::GetModule(system);
+                    if (cfg) {
+                        cfg->SetUsername(trimmed.toStdU16String());
+                        cfg->UpdateConfigNANDSavegame();
+                    }
+                    val_nickname->setText(trimmed);
+                    nickname_display->setText(trimmed);
+                }
+            });
+
+    connect(btn_edit_icon, &QPushButton::clicked, this,
+            [this, dialog, avatar_label, thumb_avatar, get_avatar_pixmap] {
+                const QString filename = QFileDialog::getOpenFileName(
+                    dialog, tr("Select Profile Icon"), QDir::homePath(),
+                    tr("Images (*.png *.jpg *.jpeg *.webp *.bmp)"));
+                if (!filename.isEmpty()) {
+                    UISettings::values.profile_avatar_path = filename;
+                    config->Save();
+                    avatar_label->setPixmap(get_avatar_pixmap(QSize(160, 160), 8));
+                    thumb_avatar->setPixmap(get_avatar_pixmap(QSize(36, 36), 4));
+                    if (home_screen) {
+                        home_screen->ApplyAppearanceSettings();
+                    }
+                }
+            });
+
+    connect(btn_link_account, &QPushButton::clicked, this, [dialog] {
+        QMessageBox::information(
+            dialog, tr("Extendo Account"),
+            tr("Your local user profile is active. Online multiplayer rooms and local system services function directly without an external account login."));
+    });
+
+    connect(btn_delete_user, &QPushButton::clicked, this,
+            [this, dialog, val_nickname, nickname_display, avatar_label, thumb_avatar,
+             get_avatar_pixmap] {
+                const auto res = QMessageBox::question(
+                    dialog, tr("Delete User"),
+                    tr("Are you sure you want to delete this user? All user profile settings will be reset to defaults."),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                if (res == QMessageBox::Yes) {
+                    UISettings::values.profile_nickname = QStringLiteral("Me");
+                    UISettings::values.profile_avatar_path = QString();
+                    config->Save();
+                    auto cfg = Service::CFG::GetModule(system);
+                    if (cfg) {
+                        cfg->SetUsername(u"Me");
+                        cfg->UpdateConfigNANDSavegame();
+                    }
+                    val_nickname->setText(QStringLiteral("Me"));
+                    nickname_display->setText(QStringLiteral("Me"));
+                    avatar_label->setPixmap(get_avatar_pixmap(QSize(160, 160), 8));
+                    thumb_avatar->setPixmap(get_avatar_pixmap(QSize(36, 36), 4));
+                    if (home_screen) {
+                        home_screen->ApplyAppearanceSettings();
+                    }
+                }
+            });
 
     QString qss;
-    qss += QStringLiteral("* { font-family: 'Roboto', sans-serif; }");
+    qss += QStringLiteral("* { font-family: 'Roboto', -apple-system, sans-serif; }");
     qss += QStringLiteral("QDialog#profileDialog { background: transparent; border: none; }");
     qss += QStringLiteral("QDialogButtonBox QPushButton { background: transparent; border: none;"
-                          " border-radius: 6px; color: %1; padding: 4px 10px; font-weight: 600; }")
-               .arg(text);
+                          " border-radius: 6px; color: #2C2C2C; padding: 4px 10px; font-weight: 600; font-size: 15px; }");
+    qss += QStringLiteral("QDialogButtonBox QPushButton:hover { background-color: rgba(0, 0, 0, 0.06); }");
     qss += QStringLiteral("QDialogButtonBox QPushButton:focus { border: none; }");
-    qss += QStringLiteral("QDialogButtonBox QPushButton:default { background: transparent;"
-                          " color: %1; }")
-               .arg(text);
-    qss += QStringLiteral("QDialogButtonBox QPushButton:default:hover { background-color: %1; }")
-               .arg(hover);
-    qss +=
-        QStringLiteral("QDialogButtonBox QPushButton:hover { background-color: %1; }").arg(hover);
-    qss += QStringLiteral("QDialogButtonBox { border: none; padding-top: 10px; }");
+    qss += QStringLiteral("QDialogButtonBox { border: none; }");
     dialog->setStyleSheet(qss);
 
     settings_overlay = new QWidget(ui->centralwidget);
@@ -3636,9 +3942,8 @@ void GMainWindow::ShowProfileOverlay() {
     settings_card = new QWidget(settings_overlay);
     settings_card->setObjectName(QStringLiteral("settingsOverlayCard"));
     settings_card->setStyleSheet(
-        QStringLiteral("#settingsOverlayCard { background-color: %1; border: 1px solid %2;"
-                       " border-radius: 20px; }")
-            .arg(bg, border));
+        QStringLiteral("#settingsOverlayCard { background-color: #EBEBEB; border: 1px solid #D0D0D0;"
+                       " border-radius: 16px; }"));
     settings_card->setAttribute(Qt::WA_StyledBackground, true);
     auto* card_layout = new QVBoxLayout(settings_card);
     card_layout->setContentsMargins(1, 1, 1, 1);

@@ -147,6 +147,9 @@ struct Values {
     /// Where the home screen's dock sits: 0 = bottom (horizontal pill), 1 = left (vertical pill).
     int home_pill_position = 0;
 
+    QString profile_nickname;
+    QString profile_avatar_path;
+
     // Shortcut name <Shortcut, context>
     std::vector<Shortcut> shortcuts;
 

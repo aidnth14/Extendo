@@ -855,6 +855,10 @@ void QtConfig::ReadUIValues() {
             ReadSetting(QStringLiteral("home_font_size"), 10).toInt();
         UISettings::values.home_pill_position =
             ReadSetting(QStringLiteral("home_pill_position"), 0).toInt();
+        UISettings::values.profile_nickname =
+            ReadSetting(QStringLiteral("profile_nickname"), QString()).toString();
+        UISettings::values.profile_avatar_path =
+            ReadSetting(QStringLiteral("profile_avatar_path"), QString()).toString();
 #ifdef ENABLE_DISCORD_RPC
         ReadBasicSetting(UISettings::values.enable_discord_presence);
 #endif
@@ -1398,6 +1402,10 @@ void QtConfig::SaveUIValues() {
         WriteSetting(QStringLiteral("home_font_size"), UISettings::values.home_font_size, 10);
         WriteSetting(QStringLiteral("home_pill_position"), UISettings::values.home_pill_position,
                      0);
+        WriteSetting(QStringLiteral("profile_nickname"), UISettings::values.profile_nickname,
+                     QString());
+        WriteSetting(QStringLiteral("profile_avatar_path"), UISettings::values.profile_avatar_path,
+                     QString());
 #ifdef ENABLE_DISCORD_RPC
         WriteBasicSetting(UISettings::values.enable_discord_presence);
 #endif
