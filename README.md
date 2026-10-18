@@ -6,14 +6,37 @@ adds custom cover art, a custom background, and an in-window settings popup.
 
 *Extendo is an independent personal project and is not affiliated with the upstream Azahar project.*
 
-Repo: https://github.com/yuske014/Extendo
+Repo: https://github.com/aidnth14/Extendo
 
 ---
 
-# Build from source
+# Quick start (macOS / Linux)
 
-There are no prebuilt releases of this fork — build it yourself with the commands below. Pick
-your OS.
+Three commands. Qt and all other libraries download automatically — you don't install them yourself.
+
+```sh
+git clone --recursive https://github.com/aidnth14/Extendo.git
+cd Extendo
+./build.sh
+```
+
+The script checks your tools, fetches submodules, configures, builds, and (on macOS) makes the
+`.app`. It prints the exact command to launch Extendo when it finishes.
+
+> Only need `git`, `cmake`, and `ninja` installed first:
+> - **macOS:** `xcode-select --install && brew install cmake ninja`
+> - **Linux (Debian/Ubuntu):** `sudo apt install -y build-essential cmake ninja-build git git-lfs libvulkan-dev libsdl2-dev`
+>
+> **Forgot `--recursive`?** Run `git submodule update --init --recursive` inside the folder, then `./build.sh`.
+
+Windows users: see the step-by-step section below.
+
+---
+
+# Build from source (manual / all platforms)
+
+Prefer the Quick Start above on macOS/Linux. The commands below are the manual equivalent and
+the Windows instructions. Pick your OS.
 
 ## Requirements (all platforms)
 
@@ -22,12 +45,13 @@ your OS.
 - [CMake](https://cmake.org/) 3.25+
 - [Ninja](https://ninja-build.org/)
 - A C++20 compiler (Clang/AppleClang on macOS, GCC/Clang on Linux, MSVC on Windows)
-- [Qt 6](https://www.qt.io/) (6.5+)
+- [Qt 6](https://www.qt.io/) — **downloaded automatically by CMake on macOS/Linux**, so you
+  normally don't install it yourself. (Windows uses the `winget` Qt below.)
 
 ## 1. Clone the repo (same on every OS)
 
 ```sh
-git clone https://github.com/yuske014/Extendo.git extendo
+git clone --recursive https://github.com/aidnth14/Extendo.git extendo
 cd extendo
 git submodule update --init --recursive
 ```
