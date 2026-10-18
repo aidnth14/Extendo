@@ -32,6 +32,7 @@
 #include "citra_qt/game_list.h"
 #include "citra_qt/game_list_p.h"
 #include "citra_qt/game_list_worker.h"
+#include "citra_qt/console_modal.h"
 #include "citra_qt/uisettings.h"
 #include "common/common_paths.h"
 #include "common/file_util.h"
@@ -847,13 +848,13 @@ void GameList::AddGamePopup(QMenu& context_menu, const QString& path, const QStr
     });
 #endif
     connect(uninstall_all, &QAction::triggered, this, [=, this] {
-        QMessageBox::StandardButton answer = QMessageBox::question(
-            this, QStringLiteral("Azahar"),
+        const auto choice = ConsoleUI::ShowConfirmModal(
+            this, QStringLiteral("Extendo"),
             tr("Are you sure you want to completely uninstall '%1'?\n\nThis will "
                "delete the application if installed, as well as any installed updates or DLC.")
                 .arg(name),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer == QMessageBox::Yes) {
+            tr("Uninstall All"), {}, tr("Cancel"));
+        if (choice == ConsoleUI::ActionChoice::Primary) {
             std::vector<std::tuple<Service::FS::MediaType, u64, QString>> titles;
             if (is_installed) {
                 titles.emplace_back(media_type, program_id, name);
@@ -870,22 +871,22 @@ void GameList::AddGamePopup(QMenu& context_menu, const QString& path, const QStr
         }
     });
     connect(uninstall_game, &QAction::triggered, this, [this, name, media_type, program_id] {
-        QMessageBox::StandardButton answer =
-            QMessageBox::question(this, QStringLiteral("Azahar"),
-                                  tr("Are you sure you want to uninstall '%1'?").arg(name),
-                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer == QMessageBox::Yes) {
+        const auto choice = ConsoleUI::ShowConfirmModal(
+            this, QStringLiteral("Extendo"),
+            tr("Are you sure you want to uninstall '%1'?").arg(name),
+            tr("Uninstall"), {}, tr("Cancel"));
+        if (choice == ConsoleUI::ActionChoice::Primary) {
             std::vector<std::tuple<Service::FS::MediaType, u64, QString>> titles;
             titles.emplace_back(media_type, program_id, name);
             main_window->UninstallTitles(titles);
         }
     });
     connect(uninstall_update, &QAction::triggered, this, [this, name, update_program_id] {
-        QMessageBox::StandardButton answer = QMessageBox::question(
-            this, QStringLiteral("Azahar"),
+        const auto choice = ConsoleUI::ShowConfirmModal(
+            this, QStringLiteral("Extendo"),
             tr("Are you sure you want to uninstall the update for '%1'?").arg(name),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer == QMessageBox::Yes) {
+            tr("Uninstall Update"), {}, tr("Cancel"));
+        if (choice == ConsoleUI::ActionChoice::Primary) {
             std::vector<std::tuple<Service::FS::MediaType, u64, QString>> titles;
             titles.emplace_back(Service::FS::MediaType::SDMC, update_program_id,
                                 tr("%1 (Update)").arg(name));
@@ -893,11 +894,11 @@ void GameList::AddGamePopup(QMenu& context_menu, const QString& path, const QStr
         }
     });
     connect(uninstall_dlc, &QAction::triggered, this, [this, name, dlc_program_id] {
-        QMessageBox::StandardButton answer = QMessageBox::question(
-            this, QStringLiteral("Azahar"),
+        const auto choice = ConsoleUI::ShowConfirmModal(
+            this, QStringLiteral("Extendo"),
             tr("Are you sure you want to uninstall all DLC for '%1'?").arg(name),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer == QMessageBox::Yes) {
+            tr("Uninstall DLC"), {}, tr("Cancel"));
+        if (choice == ConsoleUI::ActionChoice::Primary) {
             std::vector<std::tuple<Service::FS::MediaType, u64, QString>> titles;
             titles.emplace_back(Service::FS::MediaType::SDMC, dlc_program_id,
                                 tr("%1 (DLC)").arg(name));

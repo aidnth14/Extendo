@@ -30,7 +30,7 @@ struct Shortcut {
     ContextualShortcut shortcut;
 };
 
-using Themes = std::array<std::pair<const char*, const char*>, 7>;
+using Themes = std::array<std::pair<const char*, const char*>, 3>;
 extern const Themes themes;
 
 struct GameDir {
@@ -149,6 +149,13 @@ struct Values {
 
     QString profile_nickname;
     QString profile_avatar_path;
+    QString profile_full_name;
+    int profile_gender = 0;
+    int profile_time_format_24h = 0;
+    int profile_region = -1;
+    int profile_language = 1;
+    int profile_birthmonth = 1;
+    int profile_birthday = 1;
 
     // Shortcut name <Shortcut, context>
     std::vector<Shortcut> shortcuts;

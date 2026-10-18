@@ -63,6 +63,8 @@ class QPushButton;
 class QSlider;
 class QToolBar;
 class QToolButton;
+class OverlayStatusWidget;
+class ControllersPopoverWidget;
 class RegistersWidget;
 class WaitTreeWidget;
 
@@ -275,9 +277,16 @@ private slots:
     void ShowProfileOverlay();
     void RepositionSettingsOverlay();
     void RepositionHomeButton();
+    Q_INVOKABLE void RepositionInGameStatus();
+    friend class ControllersPopoverWidget;
+    Q_INVOKABLE void ToggleControllersPopover();
+    void RepositionControllersPopover();
+    void HideControllersPopover();
     /// Recolours the floating in-game Home/Controller buttons for the active theme.
     void ApplyOverlayButtonTheme();
     void OnHomeButtonClicked();
+    void SaveAutoResumeState();
+    void PromptQuitGame();
     void RepositionScreenDivider();
     void UpdateScreenSplitFromRatio(double ratio);
     void OnLoadAmiibo();
@@ -373,6 +382,8 @@ private:
     QWidget* settings_overlay = nullptr;
     QWidget* settings_card = nullptr;
     QToolButton* home_button = nullptr;
+    OverlayStatusWidget* ingame_status = nullptr;
+    ControllersPopoverWidget* controllers_popover = nullptr;
     QWidget* screen_divider = nullptr;
     bool dragging_screen_divider = false;
     // -1 means "not yet customized by the user" — the divider is positioned from whatever the
@@ -404,6 +415,11 @@ private:
     // isn't created before the check is performed
     UserDataMigrator user_data_migrator;
     std::unique_ptr<QtConfig> config;
+    QtConfig* GetConfig() const { return config.get(); }
+    Core::System& GetSystem() { return system; }
+    OverlayStatusWidget* GetInGameStatus() const { return ingame_status; }
+    HomeScreenWidget* GetHomeScreen() const { return home_screen; }
+
 
     // Hotkeys
     bool turbo_mode_active = false;

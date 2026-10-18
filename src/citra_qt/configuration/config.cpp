@@ -81,10 +81,10 @@ const std::vector<UISettings::Shortcut> QtConfig::default_hotkeys{ {
      {QStringLiteral("Multiplayer Browse Public Rooms"),      QStringLiteral("Main Window"), {QStringLiteral("Ctrl+B"), QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Multiplayer Create Room"),              QStringLiteral("Main Window"), {QStringLiteral("Ctrl+N"), QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Multiplayer Direct Connect to Room"),   QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Shift"), QStringLiteral(""), Qt::ApplicationShortcut}},
-     {QStringLiteral("Multiplayer Leave Room"),               QStringLiteral("Main Window"), {QStringLiteral("Ctrl+L"), QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Multiplayer Leave Room"),               QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Shift+L"), QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Multiplayer Show Current Room"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+R"), QStringLiteral(""), Qt::ApplicationShortcut}},
-     {QStringLiteral("Quick Save"),               QStringLiteral("Main Window"), {QStringLiteral(""),       QStringLiteral(""), Qt::ApplicationShortcut}},
-     {QStringLiteral("Quick Load"),               QStringLiteral("Main Window"), {QStringLiteral(""),       QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Quick Save"),               QStringLiteral("Main Window"), {QStringLiteral("Ctrl+S"), QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Quick Load"),               QStringLiteral("Main Window"), {QStringLiteral("Ctrl+L"), QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Remove Amiibo"),            QStringLiteral("Main Window"), {QStringLiteral("F3"),     QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Restart Emulation"),        QStringLiteral("Main Window"), {QStringLiteral("F6"),     QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Rotate Screens Upright"),   QStringLiteral("Main Window"), {QStringLiteral("F8"),     QStringLiteral(""), Qt::ApplicationShortcut}},
@@ -96,7 +96,7 @@ const std::vector<UISettings::Shortcut> QtConfig::default_hotkeys{ {
      {QStringLiteral("Toggle Filter Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+F"), QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Toggle Per-Application Speed"),  QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Z"), QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Toggle Screen Layout"),     QStringLiteral("Main Window"), {QStringLiteral("F10"),    QStringLiteral(""), Qt::ApplicationShortcut}},
-     {QStringLiteral("Toggle Status Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+S"), QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Toggle Status Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Shift+S"), QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Toggle Texture Dumping"),   QStringLiteral("Main Window"), {QStringLiteral(""),       QStringLiteral(""), Qt::ApplicationShortcut}},
      {QStringLiteral("Toggle Turbo Mode"),        QStringLiteral("Main Window"), {QStringLiteral(""),      QStringLiteral(""), Qt::ApplicationShortcut}},
     } };
@@ -847,6 +847,16 @@ void QtConfig::ReadUIValues() {
         UISettings::values.theme =
             ReadSetting(Settings::QKeys::theme, QString::fromUtf8(UISettings::themes[0].second))
                 .toString();
+        bool theme_valid = false;
+        for (const auto& t : UISettings::themes) {
+            if (UISettings::values.theme == QString::fromUtf8(t.second)) {
+                theme_valid = true;
+                break;
+            }
+        }
+        if (!theme_valid) {
+            UISettings::values.theme = QString::fromUtf8(UISettings::themes[0].second);
+        }
         UISettings::values.home_background_path =
             ReadSetting(QStringLiteral("home_background_path"), QString()).toString();
         UISettings::values.home_font_family =
@@ -859,6 +869,20 @@ void QtConfig::ReadUIValues() {
             ReadSetting(QStringLiteral("profile_nickname"), QString()).toString();
         UISettings::values.profile_avatar_path =
             ReadSetting(QStringLiteral("profile_avatar_path"), QString()).toString();
+        UISettings::values.profile_full_name =
+            ReadSetting(QStringLiteral("profile_full_name"), QString()).toString();
+        UISettings::values.profile_gender =
+            ReadSetting(QStringLiteral("profile_gender"), 0).toInt();
+        UISettings::values.profile_time_format_24h =
+            ReadSetting(QStringLiteral("profile_time_format_24h"), 0).toInt();
+        UISettings::values.profile_region =
+            ReadSetting(QStringLiteral("profile_region"), -1).toInt();
+        UISettings::values.profile_language =
+            ReadSetting(QStringLiteral("profile_language"), 1).toInt();
+        UISettings::values.profile_birthmonth =
+            ReadSetting(QStringLiteral("profile_birthmonth"), 1).toInt();
+        UISettings::values.profile_birthday =
+            ReadSetting(QStringLiteral("profile_birthday"), 1).toInt();
 #ifdef ENABLE_DISCORD_RPC
         ReadBasicSetting(UISettings::values.enable_discord_presence);
 #endif
@@ -1406,6 +1430,15 @@ void QtConfig::SaveUIValues() {
                      QString());
         WriteSetting(QStringLiteral("profile_avatar_path"), UISettings::values.profile_avatar_path,
                      QString());
+        WriteSetting(QStringLiteral("profile_full_name"), UISettings::values.profile_full_name,
+                     QString());
+        WriteSetting(QStringLiteral("profile_gender"), UISettings::values.profile_gender, 0);
+        WriteSetting(QStringLiteral("profile_time_format_24h"),
+                     UISettings::values.profile_time_format_24h, 0);
+        WriteSetting(QStringLiteral("profile_region"), UISettings::values.profile_region, -1);
+        WriteSetting(QStringLiteral("profile_language"), UISettings::values.profile_language, 1);
+        WriteSetting(QStringLiteral("profile_birthmonth"), UISettings::values.profile_birthmonth, 1);
+        WriteSetting(QStringLiteral("profile_birthday"), UISettings::values.profile_birthday, 1);
 #ifdef ENABLE_DISCORD_RPC
         WriteBasicSetting(UISettings::values.enable_discord_presence);
 #endif

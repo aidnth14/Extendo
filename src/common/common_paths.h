@@ -66,7 +66,7 @@
 #define DUMP_DIR "dump"
 #define LOAD_DIR "load"
 #define SHADER_DIR "shaders"
-#define STATES_DIR "states"
+#define STATES_DIR ".states"
 #define ICONS_DIR "icons"
 
 // Filenames

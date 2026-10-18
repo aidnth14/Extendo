@@ -68,7 +68,11 @@ if (ENABLE_QT)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${PROJECT_SOURCE_DIR}/dist/fonts/extendo_ui.ttf"
                 "${HOME_ASSET_DEST}/extendo_ui.ttf"
-        COMMENT "Copying home screen icons and UI font into the app"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${HOME_ASSET_DEST}/avatar_assets"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PROJECT_SOURCE_DIR}/dist/avatar_assets"
+                "${HOME_ASSET_DEST}/avatar_assets"
+        COMMENT "Copying home screen icons, UI font, and avatar assets into the app"
         VERBATIM
     )
 

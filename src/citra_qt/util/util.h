@@ -52,3 +52,12 @@ QPixmap GetQPixmapFromSMDH(const std::vector<u8>& smdh_data);
  * @return QImage The mirrored image
  */
 QImage GetMirroredImage(QImage source_image, bool flip_horizontal, bool flip_vertical);
+
+struct HostBatteryState {
+    int percent = 100;
+    bool charging = true;
+};
+
+HostBatteryState ReadHostBatteryState();
+
+QPixmap RenderBatteryPillIcon(const HostBatteryState& state, const QColor& color, qreal dpr);

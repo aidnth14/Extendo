@@ -64,3 +64,9 @@ GIT-TAG
 
 # verify-release.sh downloads
 verify/
+# User-supplied avatar textures extracted from the user's own game dump.
+# These are copyrighted game assets and are intentionally NOT distributed.
+/dist/avatar_assets/**/*.png
+/dist/avatar_assets/**/*.json
+
+Icon

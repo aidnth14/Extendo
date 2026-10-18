@@ -41,6 +41,9 @@ public slots:
     void ApplyAppearanceSettings();
     /// Re-reads home_screen_style.qss from the user config dir and reapplies it live.
     void ReloadExternalStyle();
+    /// Retranslates all user-visible text on the home screen when language changes.
+    void RetranslateUI();
+    QToolButton* GetBluetoothButton() const { return bluetooth_button; }
 
 signals:
     void GameChosen(const QString& game_path);
@@ -49,11 +52,13 @@ signals:
     void OpenProfile();
     void PowerOff();
     void BackgroundImageChanged();
+    void ToggleControllers();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void changeEvent(QEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
 
@@ -66,6 +71,7 @@ private:
     void UpdateClock();
     /// Re-reads the host battery and repaints the status icon.
     void UpdateBattery();
+    void UpdateBluetoothIcon();
     void UpdateTileListWidth();
     /// Re-docks the pill bar (bottom horizontal vs left vertical) per home_pill_position.
     void ApplyPillBarPlacement();
@@ -96,6 +102,10 @@ private:
     QWidget* pill_bar = nullptr;
     QBoxLayout* pill_layout = nullptr;
     QToolButton* profile_button = nullptr;
+    QToolButton* settings_button = nullptr;
+    QToolButton* add_dir_button = nullptr;
+    QToolButton* wallpaper_button = nullptr;
+    QToolButton* power_button = nullptr;
     QWidget* empty_state_container = nullptr;
     QWidget* populated_container = nullptr;
     QToolButton* large_add_button = nullptr;
@@ -116,6 +126,7 @@ private:
     QPropertyAnimation* scroll_animation = nullptr;
     QLabel* battery_label = nullptr;
     QLabel* battery_percent_label = nullptr;
+    QToolButton* bluetooth_button = nullptr;
     QWidget* legend_bar = nullptr;
 
     static constexpr int AddDirectoryRole = Qt::UserRole + 100;

@@ -91,6 +91,7 @@ public:
     void ToggleFavorite(u64 program_id);
     void AddFavorite(u64 program_id);
     void RemoveFavorite(u64 program_id);
+    void RetranslateUI();
 
     static const QStringList supported_file_extensions;
 
@@ -135,7 +136,6 @@ private:
     QString FindGameByProgramID(QStandardItem* current_item, u64 program_id, int role);
 
     void changeEvent(QEvent*) override;
-    void RetranslateUI();
 
     GameListSearchField* search_field;
     GMainWindow* main_window = nullptr;

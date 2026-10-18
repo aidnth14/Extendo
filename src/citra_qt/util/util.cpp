@@ -13,8 +13,14 @@
 #include "core/loader/smdh.h"
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include "common/file_util.h"
+#elif defined(__APPLE__)
+#include <IOKit/ps/IOPSKeys.h>
+#include <IOKit/ps/IOPowerSources.h>
 #endif
 
 QFont GetMonospaceFont() {
@@ -205,4 +211,87 @@ QImage GetMirroredImage(QImage source_image, bool flip_horizontal, bool flip_ver
 
     return source_image.flipped(orientation_horizontal | orientation_vertical);
 #endif
+}
+
+HostBatteryState ReadHostBatteryState() {
+    HostBatteryState state;
+#ifdef __APPLE__
+    CFTypeRef info = IOPSCopyPowerSourcesInfo();
+    if (!info) {
+        return state;
+    }
+    CFArrayRef sources = IOPSCopyPowerSourcesList(info);
+    if (sources) {
+        for (CFIndex i = 0; i < CFArrayGetCount(sources); ++i) {
+            CFDictionaryRef source =
+                IOPSGetPowerSourceDescription(info, CFArrayGetValueAtIndex(sources, i));
+            if (!source) {
+                continue;
+            }
+            int current = 0;
+            int max = 0;
+            if (auto num = static_cast<CFNumberRef>(
+                    CFDictionaryGetValue(source, CFSTR(kIOPSCurrentCapacityKey)))) {
+                CFNumberGetValue(num, kCFNumberIntType, &current);
+            }
+            if (auto num = static_cast<CFNumberRef>(
+                    CFDictionaryGetValue(source, CFSTR(kIOPSMaxCapacityKey)))) {
+                CFNumberGetValue(num, kCFNumberIntType, &max);
+            }
+            if (max > 0) {
+                state.percent = std::clamp(static_cast<int>(std::round(100.0 * current / max)), 0, 100);
+                const auto charging = static_cast<CFBooleanRef>(
+                    CFDictionaryGetValue(source, CFSTR(kIOPSIsChargingKey)));
+                state.charging = charging && CFBooleanGetValue(charging);
+            }
+            break;
+        }
+        CFRelease(sources);
+    }
+    CFRelease(info);
+#elif defined(_WIN32)
+    SYSTEM_POWER_STATUS sps;
+    if (GetSystemPowerStatus(&sps)) {
+        if (sps.BatteryLifePercent != 255) {
+            state.percent = std::clamp(static_cast<int>(sps.BatteryLifePercent), 0, 100);
+        }
+        state.charging = (sps.BatteryFlag & 8) != 0 || sps.ACLineStatus == 1;
+    }
+#endif
+    return state;
+}
+
+QPixmap RenderBatteryPillIcon(const HostBatteryState& state, const QColor& color, qreal dpr) {
+    constexpr int Width = 26;
+    constexpr int Height = 13;
+    QPixmap pixmap(qRound(Width * dpr), qRound(Height * dpr));
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QRectF body(0.5, 0.5, Width - 6.0, Height - 1.0);
+    QPen outline(color);
+    outline.setWidthF(1.4);
+    painter.setPen(outline);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(body, 3, 3);
+
+    // Terminal nub on the right-hand end
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    painter.drawRoundedRect(QRectF(body.right() + 1.5, Height / 2.0 - 2.5, 2.5, 5.0), 1, 1);
+
+    // Fill
+    const qreal inset = 2.5;
+    const qreal usable = body.width() - inset * 2;
+    const qreal filled = std::max(usable * state.percent / 100.0, state.percent > 0 ? 1.5 : 0.0);
+    if (filled > 0.0) {
+        painter.setBrush(state.percent <= 15 && !state.charging ? QColor(0xe0, 0x3c, 0x3c) : color);
+        painter.drawRoundedRect(
+            QRectF(body.left() + inset, body.top() + inset, filled, body.height() - inset * 2), 1.5,
+            1.5);
+    }
+    return pixmap;
 }

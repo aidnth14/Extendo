@@ -800,6 +800,12 @@ void System::Shutdown(bool is_deserializing) {
 
     // Shutdown emulation session
     is_powered_on = false;
+    {
+        std::scoped_lock lock{signal_mutex};
+        current_signal = Signal::None;
+    }
+    save_state_request_status = SaveStateStatus::NONE;
+    save_state_status = SaveStateStatus::NONE;
 
     gpu.reset();
     if (!is_deserializing) {

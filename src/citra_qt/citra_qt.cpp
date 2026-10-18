@@ -20,6 +20,7 @@
 #include <QLabel>
 #include <QMessageBox>
 #include <QPalette>
+#include <QProcess>
 #include <QPropertyAnimation>
 #include <QStyleFactory>
 #include <QSysInfo>
@@ -50,6 +51,8 @@
 #include "citra_qt/applets/mii_selector.h"
 #include "citra_qt/applets/swkbd.h"
 #include "citra_qt/bootmanager.h"
+#include "citra_qt/mii_maker/mii_maker_dialog.h"
+#include "citra_qt/console_modal.h"
 #include "citra_qt/camera/qt_multimedia_camera.h"
 #include "citra_qt/camera/still_image_camera.h"
 #include "citra_qt/citra_qt.h"
@@ -94,6 +97,9 @@
 #include "citra_qt/util/clickable_label.h"
 #include "citra_qt/util/graphics_device_info.h"
 #include "citra_qt/util/util.h"
+#ifdef Q_OS_MAC
+#include "citra_qt/util/metal_util.h"
+#endif
 #include "common/arch.h"
 #include "common/common_paths.h"
 #include "common/dynamic_library.h"
@@ -102,6 +108,7 @@
 #include "common/logging/backend.h"
 #include "common/logging/log.h"
 #include "common/memory_detect.h"
+#include "common/param_package.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
 #if CITRA_ARCH(x86_64)
@@ -272,7 +279,6 @@ static int GetMajorVersion(const std::string& version) {
 class OverlayHomeButton : public QToolButton {
 public:
     explicit OverlayHomeButton(QWidget* parent = nullptr) : QToolButton(parent) {
-        setAttribute(Qt::WA_TranslucentBackground, true);
         setAttribute(Qt::WA_NoSystemBackground, true);
         setAutoFillBackground(false);
         setAttribute(Qt::WA_Hover, true);
@@ -330,18 +336,36 @@ protected:
         p.setRenderHint(QPainter::Antialiasing, true);
         p.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
-        const bool is_hover = hovered && underMouse();
-        const QColor bg = white ? (isDown() ? QColor(0xd0, 0xd0, 0xd0, 240)
-                                            : (is_hover ? QColor(0xe6, 0xe6, 0xe6, 240)
-                                                        : QColor(0xff, 0xff, 0xff, 230)))
-                                : (isDown() ? QColor(0x24, 0x24, 0x28, 230)
-                                            : (is_hover ? QColor(0x3a, 0x3a, 0x42, 230)
-                                                        : QColor(0x1e, 0x1e, 0x22, 210)));
-        const QColor border = white ? QColor(0xcc, 0xcc, 0xcc) : QColor(0x2c, 0x2c, 0x32);
+        // Letterbox surrounding background color
+        const float bg_r = Settings::values.bg_red.GetValue();
+        const float bg_g = Settings::values.bg_green.GetValue();
+        const float bg_b = Settings::values.bg_blue.GetValue();
+        const float lum = bg_r * 0.299f + bg_g * 0.587f + bg_b * 0.114f;
+        const bool is_surround_dark = !white || (lum < 0.5f);
 
-        const QRectF r = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
-        p.setPen(QPen(border, 1.0));
-        p.setBrush(bg);
+        const QColor surround = is_surround_dark
+                                    ? QColor::fromRgbF(std::clamp(bg_r, 0.0f, 1.0f),
+                                                       std::clamp(bg_g, 0.0f, 1.0f),
+                                                       std::clamp(bg_b, 0.0f, 1.0f))
+                                    : QColor(0xff, 0xff, 0xff);
+
+        // Fill bounding rect with surrounding background so corners seamlessly match letterbox
+        p.fillRect(rect(), surround);
+
+        // Inside the circular ring: matches the background when idle, with subtle hover/press feedback
+        const bool is_hover = hovered && underMouse();
+        const QColor disc_bg = is_surround_dark
+                                   ? (isDown() ? QColor(0x3a, 0x3a, 0x42)
+                                               : (is_hover ? QColor(0x24, 0x24, 0x2a) : surround))
+                                   : (isDown() ? QColor(0xd2, 0xd2, 0xd8)
+                                               : (is_hover ? QColor(0xe8, 0xe8, 0xee) : surround));
+
+        // Circular ring: white if background is black, black otherwise
+        const QColor ring_color = is_surround_dark ? QColor(0xff, 0xff, 0xff) : QColor(0x00, 0x00, 0x00);
+
+        const QRectF r = QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5);
+        p.setPen(QPen(ring_color, 1.5));
+        p.setBrush(disc_bg);
         p.drawEllipse(r);
 
         const QIcon ic = icon();
@@ -356,6 +380,328 @@ protected:
 private:
     bool white = false;
     bool hovered = false;
+};
+
+class OverlayStatusWidget : public QWidget {
+public:
+    explicit OverlayStatusWidget(QWidget* parent = nullptr) : QWidget(parent) {
+        setAttribute(Qt::WA_NoSystemBackground, true);
+        setAutoFillBackground(false);
+        setMouseTracking(true);
+        setAttribute(Qt::WA_Hover, true);
+        setFocusPolicy(Qt::NoFocus);
+        setFixedHeight(32);
+        setFixedWidth(190);
+
+        update_timer = new QTimer(this);
+        connect(update_timer, &QTimer::timeout, this, &OverlayStatusWidget::RefreshStatus);
+        update_timer->start(2000);
+        RefreshStatus();
+    }
+
+    void SetTheme(bool is_white) {
+        if (white == is_white) {
+            return;
+        }
+        white = is_white;
+        update();
+    }
+
+    void SetPopoverOpen(bool open) {
+        if (popover_open != open) {
+            popover_open = open;
+            update();
+        }
+    }
+
+    void RefreshStatus() {
+        battery_state = ReadHostBatteryState();
+        const QString format = (UISettings::values.profile_time_format_24h == 0)
+                                   ? QStringLiteral("h:mm AP")
+                                   : QStringLiteral("hh:mm");
+        time_string = QDateTime::currentDateTime().toString(format);
+        battery_string = QStringLiteral("%1%").arg(battery_state.percent);
+
+        QFont f = font();
+        f.setPointSize(11);
+        f.setBold(true);
+        QFontMetrics fm_bold(f);
+        int time_w = fm_bold.horizontalAdvance(time_string);
+
+        f.setBold(false);
+        QFontMetrics fm_reg(f);
+        int batt_w = fm_reg.horizontalAdvance(battery_string);
+
+        // 5 (left pad) + 25 (bluetooth) + 4 (space) + 1 (divider) + 5 (space) + 26 (battery pill) + 6 + batt_w + 8 + 8 (dot) + 8 + time_w + 14 (right pad)
+        int needed_w = 5 + 25 + 4 + 1 + 5 + 26 + 6 + batt_w + 8 + 8 + 8 + time_w + 14;
+        if (needed_w < 180) {
+            needed_w = 180;
+        }
+
+        if (width() != needed_w) {
+            setFixedWidth(needed_w);
+            if (parentWidget()) {
+                QMetaObject::invokeMethod(window(), "RepositionInGameStatus", Qt::DirectConnection);
+            }
+        }
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        Q_UNUSED(event);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setRenderHint(QPainter::TextAntialiasing, true);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+        // Letterbox surrounding background color
+        const float bg_r = Settings::values.bg_red.GetValue();
+        const float bg_g = Settings::values.bg_green.GetValue();
+        const float bg_b = Settings::values.bg_blue.GetValue();
+        const float lum = bg_r * 0.299f + bg_g * 0.587f + bg_b * 0.114f;
+        const bool is_surround_dark = !white || (lum < 0.5f);
+
+        const QColor surround = is_surround_dark
+                                    ? QColor::fromRgbF(std::clamp(bg_r, 0.0f, 1.0f),
+                                                       std::clamp(bg_g, 0.0f, 1.0f),
+                                                       std::clamp(bg_b, 0.0f, 1.0f))
+                                    : QColor(0xff, 0xff, 0xff);
+
+        // Fill bounding rect with surrounding background so corners seamlessly match letterbox
+        p.fillRect(rect(), surround);
+
+        // Ring, sprite, and font colors: white if background is black, black otherwise
+        const QColor ring_color = is_surround_dark ? QColor(0xff, 0xff, 0xff) : QColor(0x00, 0x00, 0x00);
+        const QColor fg = is_surround_dark ? QColor(0xff, 0xff, 0xff) : QColor(0x00, 0x00, 0x00);
+        const QColor fg_muted = is_surround_dark ? QColor(0xee, 0xee, 0xee) : QColor(0x22, 0x22, 0x22);
+        const QColor dot_color = is_surround_dark ? QColor(0xaa, 0xae, 0xb8) : QColor(0x60, 0x64, 0x70);
+
+        // Draw outer pill capsule ring with surrounding background fill
+        const QRectF r = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
+        p.setPen(QPen(ring_color, 1.5));
+        p.setBrush(surround);
+        p.drawRoundedRect(r, 15.0, 15.0);
+
+        // Bluetooth button rect:
+        const QRect bt_rect(5, 4, 25, 24);
+
+        if (bt_hovered || popover_open) {
+            const QRectF bt_pill = QRectF(bt_rect).adjusted(1.0, 1.0, -1.0, -1.0);
+            p.setPen(Qt::NoPen);
+            p.setBrush(is_surround_dark
+                           ? QColor(255, 255, 255, popover_open ? 55 : 30)
+                           : QColor(0, 0, 0, popover_open ? 40 : 20));
+            p.drawRoundedRect(bt_pill, 11.0, 11.0);
+        }
+
+        // Draw Bluetooth vector symbol
+        const qreal cx = bt_rect.center().x();
+        const qreal cy = bt_rect.center().y();
+        const qreal h_half = 6.5;
+        const qreal arm = 4.0;
+
+        QPainterPath bt_path;
+        bt_path.moveTo(cx - arm, cy - arm);
+        bt_path.lineTo(cx + arm, cy + arm);
+        bt_path.lineTo(cx, cy + h_half);
+        bt_path.lineTo(cx, cy - h_half);
+        bt_path.lineTo(cx + arm, cy - arm);
+        bt_path.lineTo(cx - arm, cy + arm);
+
+        p.setPen(QPen(fg, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(bt_path);
+
+        // Subtle vertical separator between Bluetooth and Battery
+        const int sep_x = bt_rect.right() + 4;
+        p.setPen(QPen(is_surround_dark ? QColor(255, 255, 255, 55) : QColor(0, 0, 0, 45), 1.0));
+        p.drawLine(sep_x, 8, sep_x, height() - 8);
+
+        // Draw battery icon
+        const qreal dpr = devicePixelRatioF();
+        QPixmap batt_icon = RenderBatteryPillIcon(battery_state, fg, dpr);
+        int cur_x = sep_x + 6;
+        p.drawPixmap(QPoint(cur_x, (height() - 13) / 2), batt_icon);
+        cur_x += 26 + 6;
+
+        // Draw battery percentage text
+        QFont regular_f = font();
+        regular_f.setPointSize(11);
+        regular_f.setBold(false);
+        p.setFont(regular_f);
+        p.setPen(fg_muted);
+        QFontMetrics fm_reg(regular_f);
+        int batt_w = fm_reg.horizontalAdvance(battery_string);
+        p.drawText(QRect(cur_x, 0, batt_w, height()), Qt::AlignVCenter | Qt::AlignLeft, battery_string);
+        cur_x += batt_w;
+
+        // Draw subtle separator dot •
+        cur_x += 8;
+        p.setPen(dot_color);
+        p.drawText(QRect(cur_x, 0, 8, height()), Qt::AlignVCenter | Qt::AlignCenter, QStringLiteral("•"));
+        cur_x += 12;
+
+        // Draw time string (heavy/bold for big weight jump, Rule 8)
+        QFont bold_f = font();
+        bold_f.setPointSize(11);
+        bold_f.setBold(true);
+        p.setFont(bold_f);
+        p.setPen(fg);
+        QFontMetrics fm_bold(bold_f);
+        int time_w = fm_bold.horizontalAdvance(time_string);
+        p.drawText(QRect(cur_x, 0, time_w, height()), Qt::AlignVCenter | Qt::AlignLeft, time_string);
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        const QRect bt_rect(5, 4, 25, 24);
+        bool hovered = bt_rect.contains(event->pos());
+        if (hovered != bt_hovered) {
+            bt_hovered = hovered;
+            setCursor(bt_hovered ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            update();
+        }
+        event->accept();
+    }
+
+    void leaveEvent(QEvent* event) override {
+        Q_UNUSED(event);
+        if (bt_hovered) {
+            bt_hovered = false;
+            setCursor(Qt::ArrowCursor);
+            update();
+        }
+    }
+
+    void mousePressEvent(QMouseEvent* event) override {
+        const QRect bt_rect(5, 4, 25, 24);
+        if (event->button() == Qt::LeftButton && bt_rect.contains(event->pos())) {
+            QMetaObject::invokeMethod(window(), "ToggleControllersPopover", Qt::DirectConnection);
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+private:
+    bool white = false;
+    bool bt_hovered = false;
+    bool popover_open = false;
+    HostBatteryState battery_state;
+    QString battery_string;
+    QString time_string;
+    QTimer* update_timer = nullptr;
+};
+
+class DeviceIconWidget : public QWidget {
+public:
+    explicit DeviceIconWidget(bool gamepad, bool is_white, QWidget* parent = nullptr)
+        : QWidget(parent), is_gamepad(gamepad), white(is_white) {
+        setFixedSize(28, 28);
+    }
+
+    void SetTheme(bool is_white) {
+        white = is_white;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        Q_UNUSED(event);
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+
+        // Circle badge
+        const QColor bg = white ? QColor(0, 0, 0, 16) : QColor(255, 255, 255, 24);
+        p.setBrush(bg);
+        p.setPen(Qt::NoPen);
+        p.drawEllipse(rect().adjusted(1, 1, -1, -1));
+
+        const QColor icon_color = white ? QColor(50, 50, 55) : QColor(220, 220, 225);
+
+        if (is_gamepad) {
+            // Gamepad body
+            p.setPen(QPen(icon_color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            p.setBrush(Qt::NoBrush);
+            const QRectF gp_rect(6.0, 9.0, 16.0, 10.0);
+            p.drawRoundedRect(gp_rect, 3.5, 3.5);
+
+            // Dpad
+            p.setPen(Qt::NoPen);
+            p.setBrush(icon_color);
+            p.fillRect(QRectF(8.5, 13.0, 3.0, 1.2), icon_color);
+            p.fillRect(QRectF(9.4, 12.1, 1.2, 3.0), icon_color);
+
+            // Face buttons (A, B, X, Y)
+            p.drawEllipse(QPointF(17.0, 12.5), 0.8, 0.8);
+            p.drawEllipse(QPointF(19.0, 14.0), 0.8, 0.8);
+            p.drawEllipse(QPointF(17.0, 15.5), 0.8, 0.8);
+            p.drawEllipse(QPointF(15.0, 14.0), 0.8, 0.8);
+        } else {
+            // Keyboard
+            p.setPen(QPen(icon_color, 1.3));
+            p.setBrush(Qt::NoBrush);
+            const QRectF kb(5.0, 9.0, 18.0, 10.0);
+            p.drawRoundedRect(kb, 2.5, 2.5);
+            p.setPen(Qt::NoPen);
+            p.setBrush(icon_color);
+            for (int r = 0; r < 2; ++r) {
+                for (int c = 0; c < 4; ++c) {
+                    p.fillRect(QRectF(7.5 + c * 3.4, 11.0 + r * 3.0, 1.8, 1.6), icon_color);
+                }
+            }
+        }
+    }
+
+private:
+    bool is_gamepad = true;
+    bool white = false;
+};
+
+class ControllersPopoverWidget : public QWidget {
+public:
+    explicit ControllersPopoverWidget(GMainWindow* main_win, QWidget* parent = nullptr);
+    ~ControllersPopoverWidget() override;
+
+    void SetTheme(bool is_white);
+    void RefreshDevices();
+    void AutoMapPrimaryController();
+    void OpenBluetoothPreferences();
+    void OpenControllerSettings();
+    void OnTopProfileChanged(int index);
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
+private:
+    void ApplyStyles();
+
+    GMainWindow* main_window = nullptr;
+    bool white = false;
+    bool suppress_profile_events = false;
+
+    QVBoxLayout* root_layout = nullptr;
+    QLabel* title_label = nullptr;
+    QPushButton* close_btn = nullptr;
+    QLabel* devices_header = nullptr;
+    QWidget* devices_container = nullptr;
+    QVBoxLayout* devices_layout = nullptr;
+    QPushButton* pair_btn = nullptr;
+    QPushButton* refresh_btn = nullptr;
+    QFrame* divider1 = nullptr;
+    QLabel* assign_header = nullptr;
+    QLabel* top_label = nullptr;
+    QComboBox* top_combo = nullptr;
+    QLabel* bottom_label = nullptr;
+    QComboBox* bottom_combo = nullptr;
+    QPushButton* automap_btn = nullptr;
+    QLabel* automap_status = nullptr;
+    QFrame* divider2 = nullptr;
+    QPushButton* bt_settings_link = nullptr;
+    QPushButton* all_settings_link = nullptr;
 };
 
 GMainWindow::GMainWindow(Core::System& system_)
@@ -680,6 +1026,8 @@ void GMainWindow::InitializeWidgets() {
     connect(home_screen, &HomeScreenWidget::PowerOff, this, &QMainWindow::close);
     connect(home_screen, &HomeScreenWidget::BackgroundImageChanged, this,
             [this] { config->Save(); });
+    connect(home_screen, &HomeScreenWidget::ToggleControllers, this,
+            &GMainWindow::ToggleControllersPopover);
     connect(game_list, &GameList::PopulatingCompleted, home_screen, &HomeScreenWidget::Refresh);
     home_screen->show();
 
@@ -697,6 +1045,10 @@ void GMainWindow::InitializeWidgets() {
     home_button->hide();
     home_button->raise();
     connect(home_button, &QToolButton::clicked, this, &GMainWindow::OnHomeButtonClicked);
+
+    ingame_status = new OverlayStatusWidget(ui->centralwidget);
+    ingame_status->hide();
+    ingame_status->raise();
 
     ApplyOverlayButtonTheme();
 
@@ -724,6 +1076,15 @@ void GMainWindow::InitializeWidgets() {
             render_window->show();
             render_window->setFocus();
             render_window->activateWindow();
+            RepositionHomeButton();
+            home_button->show();
+            home_button->raise();
+            RepositionInGameStatus();
+            if (ingame_status) {
+                ingame_status->RefreshStatus();
+                ingame_status->show();
+                ingame_status->raise();
+            }
         }
     });
 
@@ -1290,7 +1651,7 @@ void GMainWindow::ConnectMenuEvents() {
 
     // Emulation
     connect_menu(ui->action_Pause, &GMainWindow::OnPauseContinueGame);
-    connect_menu(ui->action_Stop, &GMainWindow::OnStopGame);
+    connect_menu(ui->action_Stop, &GMainWindow::PromptQuitGame);
     connect_menu(ui->action_Restart, [this] { BootGame(QString(game_path)); });
     connect_menu(ui->action_Report_Compatibility, []() {
         QDesktopServices::openUrl(QUrl(QStringLiteral(
@@ -1629,18 +1990,16 @@ void GMainWindow::BootGame(const QString& filename) {
     // NOTE: We could make this not hardcoded, but it's a temp thing anyway so probs not worth. -OS
     if (Settings::values.graphics_api.GetValue() == Settings::GraphicsAPI::Vulkan &&
         Settings::values.texture_filter.GetValue() == Settings::TextureFilter::Anime4K) {
-        const auto answer = QMessageBox::warning(
+        const auto choice = ConsoleUI::ShowConfirmModal(
             this, tr("Incompatible texture filter"),
             tr("The selected texture filter (Anime4K) is not compatible with the Vulkan "
                "renderer.\nThe texture filter will be set to None.\nProceed?"),
-            QMessageBox::Yes | QMessageBox::No);
+            tr("Proceed"), {}, tr("Cancel"));
 
-        if (answer == QMessageBox::No) {
+        if (choice != ConsoleUI::ActionChoice::Primary) {
             return;
         }
-        if (answer == QMessageBox::Yes) {
-            Settings::values.texture_filter = Settings::TextureFilter::NoFilter;
-        }
+        Settings::values.texture_filter = Settings::TextureFilter::NoFilter;
     }
 
     const bool is_artic = filename.startsWith(QString::fromStdString("articbase:/")) ||
@@ -1648,12 +2007,12 @@ void GMainWindow::BootGame(const QString& filename) {
                           filename.startsWith(QString::fromStdString("articinin:/"));
 
     if (!is_artic && filename.endsWith(QStringLiteral(".cia"))) {
-        const auto answer = QMessageBox::question(
+        const auto choice = ConsoleUI::ShowConfirmModal(
             this, tr("CIA must be installed before usage"),
             tr("Before using this CIA, you must install it. Do you want to install it now?"),
-            QMessageBox::Yes | QMessageBox::No);
+            tr("Install"), {}, tr("Cancel"));
 
-        if (answer == QMessageBox::Yes)
+        if (choice == ConsoleUI::ActionChoice::Primary)
             InstallCIA(QStringList(filename));
 
         return;
@@ -1745,6 +2104,28 @@ void GMainWindow::BootGame(const QString& filename) {
         graphicsWidget->Register();
     }
 
+    bool should_auto_resume = false;
+    u32 resume_slot = Core::AutoResumeSlot;
+    auto resume_info = Core::GetSaveStateInfo(game_title_id, 0, Core::AutoResumeSlot);
+    if (resume_info.slot != Core::AutoResumeSlot) {
+        resume_info = Core::GetSaveStateInfo(game_title_id, 0, 0);
+        if (resume_info.slot == 0) {
+            resume_slot = 0;
+        }
+    }
+    if (resume_info.slot == resume_slot) {
+        const auto choice = ConsoleUI::ShowConfirmModal(
+            this, tr("Resume Session"),
+            tr("A previous saved session was found for this game.\nWould you like to resume where you left off?"),
+            tr("Resume"), {}, tr("Start from Beginning"));
+        if (choice == ConsoleUI::ActionChoice::Primary) {
+            should_auto_resume = true;
+        } else {
+            const auto resume_path = Core::GetSaveStatePath(game_title_id, 0, resume_slot);
+            FileUtil::Delete(resume_path);
+        }
+    }
+
     // Create and start the emulation thread
     emu_thread = std::make_unique<EmuThread>(system, *render_window);
     emit EmulationStarting(emu_thread.get());
@@ -1799,7 +2180,19 @@ void GMainWindow::BootGame(const QString& filename) {
     home_button->show();
     home_button->raise();
 
+    RepositionInGameStatus();
+    if (ingame_status) {
+        ingame_status->RefreshStatus();
+        ingame_status->show();
+        ingame_status->raise();
+    }
+
     OnResumeGame(true);
+
+    if (should_auto_resume) {
+        system.SendSignal(Core::System::Signal::Load, resume_slot);
+        system.frame_limiter.AdvanceFrame();
+    }
 }
 
 void GMainWindow::ShutdownGame() {
@@ -1893,6 +2286,10 @@ void GMainWindow::ShutdownGame() {
 
     emulation_running = false;
     home_button->hide();
+    if (ingame_status) {
+        ingame_status->hide();
+    }
+    HideControllersPopover();
     screen_divider->hide();
 
     game_title.clear();
@@ -2100,9 +2497,9 @@ void GMainWindow::OnGameListOpenFolder(u64 data_id, GameListOpenTarget target) {
 
     QDir dir(qpath);
     if (!dir.exists()) {
-        QMessageBox::critical(
+        ConsoleUI::ShowAlertModal(
             this, tr("Error Opening %1 Folder").arg(QString::fromStdString(open_target)),
-            tr("Folder does not exist!"));
+            tr("Folder does not exist!"), ConsoleUI::AlertType::Error);
         return;
     }
 
@@ -2112,9 +2509,9 @@ void GMainWindow::OnGameListOpenFolder(u64 data_id, GameListOpenTarget target) {
 }
 
 void GMainWindow::OnGameListRemovePlayTimeData(u64 program_id) {
-    if (QMessageBox::question(this, tr("Remove Play Time Data"), tr("Reset play time?"),
-                              QMessageBox::Yes | QMessageBox::No,
-                              QMessageBox::No) != QMessageBox::Yes) {
+    if (ConsoleUI::ShowConfirmModal(this, tr("Remove Play Time Data"), tr("Reset play time?"),
+                                     tr("Reset"), {}, tr("Cancel")) !=
+        ConsoleUI::ActionChoice::Primary) {
         return;
     }
 
@@ -2837,6 +3234,17 @@ void GMainWindow::OnResumeGame(bool first_start) {
 
     UpdateSaveStates();
     UpdateStatusButtons();
+    if (home_button && emulation_running) {
+        RepositionHomeButton();
+        home_button->show();
+        home_button->raise();
+    }
+    if (ingame_status && emulation_running) {
+        RepositionInGameStatus();
+        ingame_status->RefreshStatus();
+        ingame_status->show();
+        ingame_status->raise();
+    }
 }
 
 void GMainWindow::OnRestartGame() {
@@ -2887,6 +3295,15 @@ void GMainWindow::OnStopGame() {
 void GMainWindow::OnLoadComplete() {
     loading_screen->OnLoadComplete();
     UpdateSecondaryWindowVisibility();
+    RepositionHomeButton();
+    home_button->show();
+    home_button->raise();
+    RepositionInGameStatus();
+    if (ingame_status) {
+        ingame_status->RefreshStatus();
+        ingame_status->show();
+        ingame_status->raise();
+    }
 }
 
 void GMainWindow::ToggleFullscreen() {
@@ -2935,6 +3352,14 @@ void GMainWindow::ShowFullscreen() {
         WindowCornerManager::instance().blockRoundedCorners(this, true);
 #endif
         showFullScreen();
+        RepositionHomeButton();
+        if (home_button && emulation_running) {
+            home_button->raise();
+        }
+        RepositionInGameStatus();
+        if (ingame_status && emulation_running) {
+            ingame_status->raise();
+        }
     } else {
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
 #ifdef NEEDS_ROUND_CORNERS_FIX
@@ -2953,6 +3378,14 @@ void GMainWindow::HideFullscreen() {
 #endif
         showNormal();
         restoreGeometry(UISettings::values.geometry);
+        RepositionHomeButton();
+        if (home_button && emulation_running) {
+            home_button->raise();
+        }
+        RepositionInGameStatus();
+        if (ingame_status && emulation_running) {
+            ingame_status->raise();
+        }
     } else {
 #ifdef NEEDS_ROUND_CORNERS_FIX
         WindowCornerManager::instance().blockRoundedCorners(render_window, false);
@@ -3180,6 +3613,86 @@ void GMainWindow::OnLoadState() {
     system.frame_limiter.AdvanceFrame();
 }
 
+void GMainWindow::SaveAutoResumeState() {
+    if (!emulation_running || !system.IsPoweredOn()) {
+        return;
+    }
+    LOG_INFO(Frontend, "Saving auto-resume state for title {:016X}", game_title_id);
+    system.SendSignal(Core::System::Signal::Save, Core::AutoResumeSlot);
+
+    const auto start = std::chrono::steady_clock::now();
+    // 1. Wait until the emu thread picks up the signal and transitions to SAVING
+    while (system.IsSignalPending(Core::System::Signal::Save)) {
+        system.frame_limiter.AdvanceFrame();
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
+            LOG_ERROR(Frontend, "Timed out waiting for save signal to start");
+            break;
+        }
+    }
+
+    // 2. Wait until the emu thread finishes saving the state to disk
+    while (system.IsSaveStatePending()) {
+        system.frame_limiter.AdvanceFrame();
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        if (std::chrono::steady_clock::now() - start > std::chrono::seconds(5)) {
+            LOG_ERROR(Frontend, "Timed out waiting for save state to finish");
+            break;
+        }
+    }
+
+    LOG_INFO(Frontend, "Auto-resume save completed for title {:016X}", game_title_id);
+}
+
+void GMainWindow::PromptQuitGame() {
+    if (!emulation_running) {
+        return;
+    }
+
+    const bool was_home_visible = home_button && home_button->isVisible();
+    const bool was_status_visible = ingame_status && ingame_status->isVisible();
+    HideControllersPopover();
+    if (was_home_visible) {
+        home_button->hide();
+    }
+    if (was_status_visible) {
+        ingame_status->hide();
+    }
+
+    const bool was_running = emu_thread && emu_thread->IsRunning();
+    if (was_running) {
+        OnPauseGame();
+    }
+
+    const auto choice = ConsoleUI::ShowConfirmModal(
+        this, QString(),
+        tr("Do you want to save your progress before quitting?\nSaving creates an auto-resume state so you can continue right where you left off next time."),
+        tr("Save & Quit"), tr("Quit"), tr("Cancel"));
+
+    if (choice == ConsoleUI::ActionChoice::Primary) {
+        SaveAutoResumeState();
+        OnStopGame();
+    } else if (choice == ConsoleUI::ActionChoice::Secondary) {
+        const auto resume_path = Core::GetSaveStatePath(game_title_id, 0, Core::AutoResumeSlot);
+        FileUtil::Delete(resume_path);
+        OnStopGame();
+    } else {
+        if (was_home_visible) {
+            home_button->show();
+            home_button->raise();
+        }
+        if (was_status_visible) {
+            ingame_status->show();
+            ingame_status->raise();
+        }
+        if (was_running) {
+            OnResumeGame(false);
+        }
+    }
+}
+
 void GMainWindow::OnEscapePressed() {
     if (settings_overlay) {
         if (auto* dialog = settings_overlay->findChild<QDialog*>()) {
@@ -3191,24 +3704,11 @@ void GMainWindow::OnEscapePressed() {
         close();
         return;
     }
-    const auto result = QMessageBox::question(this, tr("Quit Session"),
-                                              tr("Do you want to quit the current session?"),
-                                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (result == QMessageBox::Yes) {
-        ui->action_Stop->trigger();
-    }
+    PromptQuitGame();
 }
 
 void GMainWindow::OnHomeButtonClicked() {
-    if (!emulation_running) {
-        return;
-    }
-    const auto result = QMessageBox::question(this, tr("Quit Session"),
-                                              tr("Do you want to quit the current session?"),
-                                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (result == QMessageBox::Yes) {
-        ui->action_Stop->trigger();
-    }
+    PromptQuitGame();
 }
 
 void GMainWindow::OnConfigure() {
@@ -3446,7 +3946,19 @@ void GMainWindow::ShowConfigureOverlay(int initial_tab, bool enable_web_config) 
             connect(selector_list, &QListWidget::itemSelectionChanged, dialog, wrap_and_relayout);
         }
     }
-    connect(dialog, &ConfigureDialog::LanguageChanged, this, &GMainWindow::OnLanguageChanged);
+    auto* settings_button_box = dialog->findChild<QDialogButtonBox*>(QStringLiteral("buttonBox"));
+    connect(dialog, &ConfigureDialog::LanguageChanged, this,
+            [this, settings_button_box](const QString& locale) {
+                OnLanguageChanged(locale);
+                if (settings_button_box) {
+                    if (auto* cancel_button = settings_button_box->button(QDialogButtonBox::Cancel)) {
+                        cancel_button->setText(tr("Back"));
+                    }
+                    if (auto* ok_button = settings_button_box->button(QDialogButtonBox::Ok)) {
+                        ok_button->setText(tr("OK"));
+                    }
+                }
+            });
 
     settings_overlay = new QWidget(ui->centralwidget);
     settings_overlay->setObjectName(QStringLiteral("settingsOverlayBackdrop"));
@@ -3586,49 +4098,213 @@ static QPixmap MakeRoundedPixmap(const QPixmap& src, const QSize& size, int radi
     return dest;
 }
 
+static int ProfileLanguageFromLocale(const QString& locale) {
+    if (locale.startsWith(QStringLiteral("ja"))) return 0;
+    if (locale.startsWith(QStringLiteral("en"))) return 1;
+    if (locale.startsWith(QStringLiteral("fr"))) return 2;
+    if (locale.startsWith(QStringLiteral("de"))) return 3;
+    if (locale.startsWith(QStringLiteral("it"))) return 4;
+    if (locale.startsWith(QStringLiteral("es"))) return 5;
+    if (locale == QStringLiteral("zh_CN") || locale == QStringLiteral("zh")) return 6;
+    if (locale.startsWith(QStringLiteral("ko"))) return 7;
+    if (locale.startsWith(QStringLiteral("nl"))) return 8;
+    if (locale.startsWith(QStringLiteral("pt"))) return 9;
+    if (locale.startsWith(QStringLiteral("ru"))) return 10;
+    if (locale == QStringLiteral("zh_TW")) return 11;
+    return -1;
+}
+
+static QString LocaleFromProfileLanguage(int lang_idx) {
+    static const QStringList locales = {
+        QStringLiteral("ja"),      // 0: Japanese
+        QStringLiteral("en"),      // 1: English
+        QStringLiteral("fr"),      // 2: French
+        QStringLiteral("de"),      // 3: German
+        QStringLiteral("it"),      // 4: Italian
+        QStringLiteral("es"),      // 5: Spanish
+        QStringLiteral("zh_CN"),   // 6: Simplified Chinese
+        QStringLiteral("ko"),      // 7: Korean
+        QStringLiteral("nl"),      // 8: Dutch
+        QStringLiteral("pt_BR"),   // 9: Portuguese
+        QStringLiteral("ru"),      // 10: Russian
+        QStringLiteral("zh_TW"),   // 11: Traditional Chinese
+    };
+    if (lang_idx >= 0 && lang_idx < locales.size()) {
+        return locales.at(lang_idx);
+    }
+    return QStringLiteral("en");
+}
+
+struct ProfileRow {
+    QPushButton* btn = nullptr;
+    QLabel* title_lbl = nullptr;
+    QLabel* val_lbl = nullptr;
+};
+
+static const QStringList s_profile_lang_names = {
+    QStringLiteral("Japanese (日本語)"),
+    QStringLiteral("English"),
+    QStringLiteral("French (français)"),
+    QStringLiteral("German (Deutsch)"),
+    QStringLiteral("Italian (italiano)"),
+    QStringLiteral("Spanish (español)"),
+    QStringLiteral("Simplified Chinese (简体中文)"),
+    QStringLiteral("Korean (한국어)"),
+    QStringLiteral("Dutch (Nederlands)"),
+    QStringLiteral("Portuguese (português)"),
+    QStringLiteral("Russian (Русский)"),
+    QStringLiteral("Traditional Chinese (正體中文)"),
+};
+
+static QStringList GetProfileRegionNames() {
+    return {
+        QCoreApplication::translate("GMainWindow", "Auto-select"),
+        QCoreApplication::translate("GMainWindow", "Japan"),
+        QCoreApplication::translate("GMainWindow", "USA"),
+        QCoreApplication::translate("GMainWindow", "Europe"),
+        QCoreApplication::translate("GMainWindow", "Australia"),
+        QCoreApplication::translate("GMainWindow", "China"),
+        QCoreApplication::translate("GMainWindow", "Korea"),
+        QCoreApplication::translate("GMainWindow", "Taiwan"),
+    };
+}
+
+static QString GetProfileRegionText() {
+    int val = Settings::values.region_value.GetValue();
+    int idx = val + 1;
+    const auto region_names = GetProfileRegionNames();
+    if (idx >= 0 && idx < region_names.size()) {
+        return region_names.at(idx);
+    }
+    return QCoreApplication::translate("GMainWindow", "Auto-select");
+}
+
+static QString GetProfileFullNameText() {
+    return UISettings::values.profile_full_name.isEmpty()
+               ? QCoreApplication::translate("GMainWindow", "Not Set")
+               : UISettings::values.profile_full_name;
+}
+
+static QStringList GetProfileGenderNames() {
+    return {
+        QCoreApplication::translate("GMainWindow", "Male"),
+        QCoreApplication::translate("GMainWindow", "Female"),
+        QCoreApplication::translate("GMainWindow", "Not Specified"),
+    };
+}
+
+static QString GetProfileGenderText() {
+    int g = UISettings::values.profile_gender;
+    const auto gender_names = GetProfileGenderNames();
+    if (g >= 0 && g < gender_names.size()) {
+        return gender_names.at(g);
+    }
+    return gender_names.at(0);
+}
+
+static QStringList GetProfileTimeFormatNames() {
+    return {
+        QCoreApplication::translate("GMainWindow", "12-Hour (AM/PM)"),
+        QCoreApplication::translate("GMainWindow", "24-Hour"),
+    };
+}
+
+static QString GetProfileTimeFormatText() {
+    int tf = UISettings::values.profile_time_format_24h;
+    const auto time_format_names = GetProfileTimeFormatNames();
+    if (tf == 1) {
+        return time_format_names.at(1);
+    }
+    return time_format_names.at(0);
+}
+
+static QString GetProfileLanguageText(Core::System& system) {
+    auto cfg = Service::CFG::GetModule(system);
+    int idx = 1;
+    if (cfg) {
+        idx = static_cast<int>(cfg->GetSystemLanguage());
+    } else {
+        idx = UISettings::values.profile_language;
+    }
+    if (idx >= 0 && idx < s_profile_lang_names.size()) {
+        return s_profile_lang_names.at(idx);
+    }
+    return s_profile_lang_names.at(1);
+}
+
+static QString GetProfileMiiText() {
+    auto miis = MiiMaker::MiiManager::LoadMiisFromNAND();
+    if (!miis.empty()) {
+        QString name = MiiMaker::MiiManager::GetMiiName(miis[0]);
+        if (!name.isEmpty()) {
+            return name;
+        }
+    }
+    return QCoreApplication::translate("GMainWindow", "Edit / Create");
+}
+
+static QString GetProfileDobText(Core::System& system) {
+    int m = UISettings::values.profile_birthmonth;
+    int d = UISettings::values.profile_birthday;
+    if (m < 1 || m > 12 || d < 1 || d > 31) {
+        auto cfg = Service::CFG::GetModule(system);
+        if (cfg) {
+            auto [cm, cd] = cfg->GetBirthday();
+            if (cm >= 1 && cm <= 12 && cd >= 1 && cd <= 31) {
+                m = cm;
+                d = cd;
+            }
+        }
+    }
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        return QLocale().toString(QDate(2000, m, d), QCoreApplication::translate("GMainWindow", "MMMM d"));
+    }
+    return QCoreApplication::translate("GMainWindow", "January 1");
+}
+
+static QString GetProfileNickname(Core::System& system) {
+    if (!UISettings::values.profile_nickname.trimmed().isEmpty()) {
+        return UISettings::values.profile_nickname;
+    }
+    auto cfg = Service::CFG::GetModule(system);
+    if (cfg) {
+        QString cfg_name = QString::fromStdU16String(cfg->GetUsername()).trimmed();
+        if (!cfg_name.isEmpty()) {
+            return cfg_name;
+        }
+    }
+    return QCoreApplication::translate("GMainWindow", "Me");
+}
+
+static QPixmap GetProfileAvatarPixmap(const QSize& size, int radius) {
+    QPixmap src;
+    if (!UISettings::values.profile_avatar_path.isEmpty() &&
+        QFile::exists(UISettings::values.profile_avatar_path)) {
+        src.load(UISettings::values.profile_avatar_path);
+    }
+    if (src.isNull()) {
+        const QString default_icon =
+            QCoreApplication::applicationDirPath() +
+            QStringLiteral("/../Resources/home_icons/default_avatar.png");
+        if (QFile::exists(default_icon)) {
+            src.load(default_icon);
+        } else {
+            src.load(QStringLiteral(
+                "/Users/shoroz/Downloads/azahar-src/dist/home_screen_icons/default_avatar.png"));
+        }
+    }
+    if (src.isNull()) {
+        src = QPixmap(size);
+        src.fill(QColor(0x28, 0xbf, 0x28));
+    }
+    return MakeRoundedPixmap(src, size, radius);
+}
+
 void GMainWindow::ShowProfileOverlay() {
     if (settings_overlay) {
         settings_overlay->raise();
         return;
     }
-
-    auto get_avatar_pixmap = [](const QSize& size, int radius) -> QPixmap {
-        QPixmap src;
-        if (!UISettings::values.profile_avatar_path.isEmpty() &&
-            QFile::exists(UISettings::values.profile_avatar_path)) {
-            src.load(UISettings::values.profile_avatar_path);
-        }
-        if (src.isNull()) {
-            const QString default_icon =
-                QCoreApplication::applicationDirPath() +
-                QStringLiteral("/../Resources/home_icons/default_avatar.png");
-            if (QFile::exists(default_icon)) {
-                src.load(default_icon);
-            } else {
-                src.load(QStringLiteral(
-                    "/Users/shoroz/Downloads/azahar-src/dist/home_screen_icons/default_avatar.png"));
-            }
-        }
-        if (src.isNull()) {
-            src = QPixmap(size);
-            src.fill(QColor(0x28, 0xbf, 0x28));
-        }
-        return MakeRoundedPixmap(src, size, radius);
-    };
-
-    auto get_current_nickname = [this]() -> QString {
-        if (!UISettings::values.profile_nickname.trimmed().isEmpty()) {
-            return UISettings::values.profile_nickname;
-        }
-        auto cfg = Service::CFG::GetModule(system);
-        if (cfg) {
-            QString cfg_name = QString::fromStdU16String(cfg->GetUsername()).trimmed();
-            if (!cfg_name.isEmpty()) {
-                return cfg_name;
-            }
-        }
-        return QStringLiteral("Me");
-    };
 
     auto* dialog = new QDialog();
     dialog->setObjectName(QStringLiteral("profileDialog"));
@@ -3669,14 +4345,44 @@ void GMainWindow::ShowProfileOverlay() {
     left_layout->setContentsMargins(0, 0, 0, 0);
     left_layout->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
 
-    auto* avatar_label = new QLabel(left_col);
+    struct HoverEventFilter : public QObject {
+        QWidget* target_badge;
+        HoverEventFilter(QWidget* badge, QObject* parent) : QObject(parent), target_badge(badge) {}
+        bool eventFilter(QObject* watched, QEvent* event) override {
+            if (event->type() == QEvent::Enter) {
+                target_badge->setVisible(true);
+            } else if (event->type() == QEvent::Leave) {
+                target_badge->setVisible(false);
+            }
+            return QObject::eventFilter(watched, event);
+        }
+    };
+
+    auto* avatar_btn = new QPushButton(left_col);
+    avatar_btn->setFixedSize(160, 160);
+    avatar_btn->setCursor(Qt::PointingHandCursor);
+    avatar_btn->setStyleSheet(QStringLiteral("background: transparent; border: none; padding: 0;"));
+
+    auto* avatar_label = new QLabel(avatar_btn);
     avatar_label->setFixedSize(160, 160);
-    avatar_label->setPixmap(get_avatar_pixmap(QSize(160, 160), 8));
+    avatar_label->setPixmap(GetProfileAvatarPixmap(QSize(160, 160), 8));
     avatar_label->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
-    left_layout->addWidget(avatar_label, 0, Qt::AlignHCenter);
+    avatar_label->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+    auto* pencil_badge = new QLabel(avatar_btn);
+    pencil_badge->setFixedSize(160, 160);
+    pencil_badge->setAlignment(Qt::AlignCenter);
+    pencil_badge->setText(QString::fromUtf8("✏"));
+    pencil_badge->setStyleSheet(QStringLiteral(
+        "background-color: rgba(0, 0, 0, 0.45); color: #FFFFFF; font-size: 42px; border-radius: 8px;"));
+    pencil_badge->setAttribute(Qt::WA_TransparentForMouseEvents);
+    pencil_badge->setVisible(false);
+
+    avatar_btn->installEventFilter(new HoverEventFilter(pencil_badge, avatar_btn));
+    left_layout->addWidget(avatar_btn, 0, Qt::AlignHCenter);
 
     left_layout->addSpacing(14);
-    auto* nickname_display = new QLabel(get_current_nickname(), left_col);
+    auto* nickname_display = new QLabel(GetProfileNickname(system), left_col);
     nickname_display->setAlignment(Qt::AlignCenter);
     nickname_display->setStyleSheet(QStringLiteral(
         "font-size: 18px; font-weight: 600; color: #2C2C2C; border: none; background: transparent;"));
@@ -3684,7 +4390,7 @@ void GMainWindow::ShowProfileOverlay() {
     left_layout->addStretch();
     content_layout->addWidget(left_col);
 
-    // Right Column: Profile Settings, Nickname, Edit Icon, Link Account, Delete User
+    // Right Column: Profile Settings (Nick Name, Full Name, Region, Date of Birth, Gender, Time Format, Language)
     auto* right_col = new QWidget(content_widget);
     auto* right_layout = new QVBoxLayout(right_col);
     right_layout->setContentsMargins(0, 0, 0, 0);
@@ -3717,88 +4423,53 @@ void GMainWindow::ShowProfileOverlay() {
 
     right_layout->addWidget(make_row_divider(right_col));
 
-    // Row 1: Nickname
-    auto* btn_nickname = new QPushButton(right_col);
-    btn_nickname->setFixedHeight(50);
-    btn_nickname->setCursor(Qt::PointingHandCursor);
-    btn_nickname->setStyleSheet(QStringLiteral(
-        "QPushButton { background: transparent; border: none; border-radius: 4px; padding: 0 8px; }"
-        "QPushButton:hover { background-color: rgba(0, 0, 0, 0.05); }"
-        "QPushButton:pressed { background-color: rgba(0, 0, 0, 0.09); }"));
-    auto* nick_layout = new QHBoxLayout(btn_nickname);
-    nick_layout->setContentsMargins(8, 0, 8, 0);
-    auto* lbl_nick_title = new QLabel(tr("Nickname"), btn_nickname);
-    lbl_nick_title->setStyleSheet(QStringLiteral(
-        "font-size: 16px; font-weight: 500; color: #2C2C2C; background: transparent; border: none;"));
-    nick_layout->addWidget(lbl_nick_title);
-    nick_layout->addStretch();
-    auto* val_nickname = new QLabel(get_current_nickname(), btn_nickname);
-    val_nickname->setStyleSheet(QStringLiteral(
-        "font-size: 16px; font-weight: 600; color: #2D55FA; background: transparent; border: none;"));
-    nick_layout->addWidget(val_nickname);
-    right_layout->addWidget(btn_nickname);
-    right_layout->addWidget(make_row_divider(right_col));
+    auto make_row = [&](const QString& title_text, const QString& initial_val) -> ProfileRow {
+        auto* btn = new QPushButton(right_col);
+        btn->setFixedHeight(46);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setStyleSheet(QStringLiteral(
+            "QPushButton { background: transparent; border: none; border-radius: 4px; padding: 0 8px; }"
+            "QPushButton:hover { background-color: rgba(0, 0, 0, 0.05); }"
+            "QPushButton:pressed { background-color: rgba(0, 0, 0, 0.09); }"));
+        auto* row_layout = new QHBoxLayout(btn);
+        row_layout->setContentsMargins(8, 0, 8, 0);
+        auto* lbl_title = new QLabel(title_text, btn);
+        lbl_title->setStyleSheet(QStringLiteral(
+            "font-size: 15px; font-weight: 500; color: #2C2C2C; background: transparent; border: none;"));
+        row_layout->addWidget(lbl_title);
+        row_layout->addStretch();
+        auto* lbl_val = new QLabel(initial_val, btn);
+        lbl_val->setStyleSheet(QStringLiteral(
+            "font-size: 15px; font-weight: 600; color: #2D55FA; background: transparent; border: none;"));
+        row_layout->addWidget(lbl_val);
+        right_layout->addWidget(btn);
+        right_layout->addWidget(make_row_divider(right_col));
+        return {btn, lbl_title, lbl_val};
+    };
 
-    // Row 2: Edit Icon
-    auto* btn_edit_icon = new QPushButton(right_col);
-    btn_edit_icon->setFixedHeight(50);
-    btn_edit_icon->setCursor(Qt::PointingHandCursor);
-    btn_edit_icon->setStyleSheet(QStringLiteral(
-        "QPushButton { background: transparent; border: none; border-radius: 4px; padding: 0 8px; }"
-        "QPushButton:hover { background-color: rgba(0, 0, 0, 0.05); }"
-        "QPushButton:pressed { background-color: rgba(0, 0, 0, 0.09); }"));
-    auto* icon_row_layout = new QHBoxLayout(btn_edit_icon);
-    icon_row_layout->setContentsMargins(8, 0, 8, 0);
-    auto* lbl_icon_title = new QLabel(tr("Edit Icon"), btn_edit_icon);
-    lbl_icon_title->setStyleSheet(QStringLiteral(
-        "font-size: 16px; font-weight: 500; color: #2C2C2C; background: transparent; border: none;"));
-    icon_row_layout->addWidget(lbl_icon_title);
-    icon_row_layout->addStretch();
-    auto* thumb_avatar = new QLabel(btn_edit_icon);
-    thumb_avatar->setFixedSize(36, 36);
-    thumb_avatar->setPixmap(get_avatar_pixmap(QSize(36, 36), 4));
-    thumb_avatar->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
-    icon_row_layout->addWidget(thumb_avatar);
-    right_layout->addWidget(btn_edit_icon);
-    right_layout->addWidget(make_row_divider(right_col));
+    // 1. Nick Name
+    auto row_nickname = make_row(tr("Nick Name"), GetProfileNickname(system));
 
-    right_layout->addSpacing(22);
-    right_layout->addWidget(make_row_divider(right_col));
+    // 2. Full Name
+    auto row_fullname = make_row(tr("Full Name"), GetProfileFullNameText());
 
-    // Row 3: Link Extendo Account
-    auto* btn_link_account = new QPushButton(right_col);
-    btn_link_account->setFixedHeight(50);
-    btn_link_account->setCursor(Qt::PointingHandCursor);
-    btn_link_account->setStyleSheet(QStringLiteral(
-        "QPushButton { background: transparent; border: none; border-radius: 4px; padding: 0 8px; }"
-        "QPushButton:hover { background-color: rgba(0, 0, 0, 0.05); }"
-        "QPushButton:pressed { background-color: rgba(0, 0, 0, 0.09); }"));
-    auto* link_layout = new QHBoxLayout(btn_link_account);
-    link_layout->setContentsMargins(8, 0, 8, 0);
-    auto* lbl_link_title = new QLabel(tr("Link Extendo Account"), btn_link_account);
-    lbl_link_title->setStyleSheet(QStringLiteral(
-        "font-size: 16px; font-weight: 500; color: #2C2C2C; background: transparent; border: none;"));
-    link_layout->addWidget(lbl_link_title);
-    link_layout->addStretch();
-    auto* link_status = new QLabel(tr("Not Linked"), btn_link_account);
-    link_status->setStyleSheet(QStringLiteral(
-        "font-size: 15px; color: #888888; background: transparent; border: none;"));
-    link_layout->addWidget(link_status);
-    right_layout->addWidget(btn_link_account);
-    right_layout->addWidget(make_row_divider(right_col));
+    // 3. Region
+    auto row_region = make_row(tr("Region"), GetProfileRegionText());
 
-    right_layout->addSpacing(22);
+    // 4. Date of Birth
+    auto row_dob = make_row(tr("Date of Birth"), GetProfileDobText(system));
 
-    // Row 4: Delete User (Cyan bordered console focus box)
-    auto* btn_delete_user = new QPushButton(tr("  ◇ Delete User"), right_col);
-    btn_delete_user->setFixedHeight(54);
-    btn_delete_user->setCursor(Qt::PointingHandCursor);
-    btn_delete_user->setStyleSheet(QStringLiteral(
-        "QPushButton { background-color: #FFFFFF; border: 3px solid #00DEC8; border-radius: 4px;"
-        " color: #2C2C2C; font-size: 16px; font-weight: 600; text-align: left; padding-left: 20px; }"
-        "QPushButton:hover { background-color: #F4FFFE; border: 3px solid #00F4DC; }"
-        "QPushButton:pressed { background-color: #E8FAF8; }"));
-    right_layout->addWidget(btn_delete_user);
+    // 5. Gender
+    auto row_gender = make_row(tr("Gender"), GetProfileGenderText());
+
+    // 6. Time Format
+    auto row_time_format = make_row(tr("Time Format"), GetProfileTimeFormatText());
+
+    // 7. Language
+    auto row_language = make_row(tr("Language"), GetProfileLanguageText(system));
+
+    // 8. Mii Profile
+    auto row_mii_profile = make_row(tr("Avatar Profile"), GetProfileMiiText());
 
     right_layout->addStretch();
     content_layout->addWidget(right_col, 1);
@@ -3834,16 +4505,110 @@ void GMainWindow::ShowProfileOverlay() {
     footer_layout->addWidget(button_box);
     dialog_layout->addWidget(footer_widget);
 
-    // Connections for functionality
-    connect(btn_nickname, &QPushButton::clicked, this,
-            [this, dialog, val_nickname, nickname_display, get_current_nickname] {
-                bool ok = false;
-                const QString cur = get_current_nickname();
-                const QString text = QInputDialog::getText(
-                    dialog, tr("Nickname"), tr("Enter a nickname (up to 10 characters):"),
-                    QLineEdit::Normal, cur, &ok);
-                if (ok && !text.trimmed().isEmpty()) {
-                    const QString trimmed = text.trimmed().left(10);
+    auto retranslate_profile_dialog = [this, title_label, sec_title, row_nickname, row_fullname,
+                                       row_region, row_dob, row_gender, row_time_format,
+                                       row_language, row_mii_profile, button_box] {
+        title_label->setText(tr("User Settings"));
+        sec_title->setText(tr("Profile Settings"));
+
+        row_nickname.title_lbl->setText(tr("Nick Name"));
+        row_fullname.title_lbl->setText(tr("Full Name"));
+        row_region.title_lbl->setText(tr("Region"));
+        row_dob.title_lbl->setText(tr("Date of Birth"));
+        row_gender.title_lbl->setText(tr("Gender"));
+        row_time_format.title_lbl->setText(tr("Time Format"));
+        row_language.title_lbl->setText(tr("Language"));
+        row_mii_profile.title_lbl->setText(tr("Avatar Profile"));
+
+        row_fullname.val_lbl->setText(GetProfileFullNameText());
+        row_region.val_lbl->setText(GetProfileRegionText());
+        row_dob.val_lbl->setText(GetProfileDobText(system));
+        row_gender.val_lbl->setText(GetProfileGenderText());
+        row_time_format.val_lbl->setText(GetProfileTimeFormatText());
+        row_language.val_lbl->setText(GetProfileLanguageText(system));
+        row_mii_profile.val_lbl->setText(GetProfileMiiText());
+
+        if (auto* cancel_button = button_box->button(QDialogButtonBox::Cancel)) {
+            cancel_button->setText(tr("Back"));
+        }
+        if (auto* ok_button = button_box->button(QDialogButtonBox::Ok)) {
+            ok_button->setText(tr("OK"));
+        }
+    };
+
+    struct ProfileDialogFilter : public QObject {
+        std::function<void()> on_retranslate;
+        ProfileDialogFilter(std::function<void()> cb, QObject* parent)
+            : QObject(parent), on_retranslate(std::move(cb)) {}
+        bool eventFilter(QObject* watched, QEvent* event) override {
+            if (event->type() == QEvent::LanguageChange) {
+                if (on_retranslate) {
+                    on_retranslate();
+                }
+            }
+            return QObject::eventFilter(watched, event);
+        }
+    };
+    dialog->installEventFilter(new ProfileDialogFilter(retranslate_profile_dialog, dialog));
+
+    auto open_mii_maker = [this, avatar_label, nickname_display, row_nickname, row_mii_profile] {
+        auto miis = MiiMaker::MiiManager::LoadMiisFromNAND();
+        const Mii::MiiData* initial = (!miis.empty() && miis[0].mii_id != 0) ? &miis[0] : nullptr;
+
+        MiiMaker::MiiMakerDialog mii_dlg(this, initial);
+        connect(&mii_dlg, &MiiMaker::MiiMakerDialog::MiiSaved, this,
+                [this, avatar_label, nickname_display, row_nickname, row_mii_profile] {
+                    config->Save();
+                    avatar_label->setPixmap(GetProfileAvatarPixmap(QSize(160, 160), 8));
+                    nickname_display->setText(GetProfileNickname(system));
+                    row_nickname.val_lbl->setText(GetProfileNickname(system));
+                    row_mii_profile.val_lbl->setText(GetProfileMiiText());
+                    if (home_screen) {
+                        home_screen->ApplyAppearanceSettings();
+                    }
+                });
+        mii_dlg.Exec();
+    };
+
+    // Connections for functionality with Nintendo Console UI Modals
+    connect(row_mii_profile.btn, &QPushButton::clicked, this, open_mii_maker);
+
+    connect(avatar_btn, &QPushButton::clicked, this,
+            [this, avatar_label, open_mii_maker] {
+                const QStringList avatar_options = {
+                    tr("🎨 Avatar Maker (Character Creator)"),
+                    tr("📁 Choose Image from Computer"),
+                };
+                int choice = ConsoleUI::ShowChoiceModal(
+                    this, tr("Profile Icon"),
+                    tr("Create a custom cel-shaded avatar or choose an image:"),
+                    avatar_options, 0);
+                if (choice == 0) {
+                    open_mii_maker();
+                } else if (choice == 1) {
+                    const QString filename = QFileDialog::getOpenFileName(
+                        this, tr("Select Profile Icon"), QDir::homePath(),
+                        tr("Images (*.png *.jpg *.jpeg *.webp *.bmp)"));
+                    if (!filename.isEmpty()) {
+                        UISettings::values.profile_avatar_path = filename;
+                        config->Save();
+                        avatar_label->setPixmap(GetProfileAvatarPixmap(QSize(160, 160), 8));
+                        if (home_screen) {
+                            home_screen->ApplyAppearanceSettings();
+                        }
+                    }
+                }
+            });
+
+    connect(row_nickname.btn, &QPushButton::clicked, this,
+            [this, row_nickname, nickname_display] {
+                const QString cur = GetProfileNickname(system);
+                auto res = ConsoleUI::ShowTextInputModal(
+                    this, tr("Nick Name"),
+                    tr("Enter a nickname for your profile (up to 10 characters):"),
+                    cur, 10);
+                if (res && !res->trimmed().isEmpty()) {
+                    const QString trimmed = res->trimmed().left(10);
                     UISettings::values.profile_nickname = trimmed;
                     config->Save();
                     auto cfg = Service::CFG::GetModule(system);
@@ -3851,53 +4616,144 @@ void GMainWindow::ShowProfileOverlay() {
                         cfg->SetUsername(trimmed.toStdU16String());
                         cfg->UpdateConfigNANDSavegame();
                     }
-                    val_nickname->setText(trimmed);
+                    row_nickname.val_lbl->setText(trimmed);
                     nickname_display->setText(trimmed);
-                }
-            });
-
-    connect(btn_edit_icon, &QPushButton::clicked, this,
-            [this, dialog, avatar_label, thumb_avatar, get_avatar_pixmap] {
-                const QString filename = QFileDialog::getOpenFileName(
-                    dialog, tr("Select Profile Icon"), QDir::homePath(),
-                    tr("Images (*.png *.jpg *.jpeg *.webp *.bmp)"));
-                if (!filename.isEmpty()) {
-                    UISettings::values.profile_avatar_path = filename;
-                    config->Save();
-                    avatar_label->setPixmap(get_avatar_pixmap(QSize(160, 160), 8));
-                    thumb_avatar->setPixmap(get_avatar_pixmap(QSize(36, 36), 4));
                     if (home_screen) {
                         home_screen->ApplyAppearanceSettings();
                     }
                 }
             });
 
-    connect(btn_link_account, &QPushButton::clicked, this, [dialog] {
-        QMessageBox::information(
-            dialog, tr("Extendo Account"),
-            tr("Your local user profile is active. Online multiplayer rooms and local system services function directly without an external account login."));
-    });
-
-    connect(btn_delete_user, &QPushButton::clicked, this,
-            [this, dialog, val_nickname, nickname_display, avatar_label, thumb_avatar,
-             get_avatar_pixmap] {
-                const auto res = QMessageBox::question(
-                    dialog, tr("Delete User"),
-                    tr("Are you sure you want to delete this user? All user profile settings will be reset to defaults."),
-                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-                if (res == QMessageBox::Yes) {
-                    UISettings::values.profile_nickname = QStringLiteral("Me");
-                    UISettings::values.profile_avatar_path = QString();
+    connect(row_fullname.btn, &QPushButton::clicked, this,
+            [this, row_fullname] {
+                const QString cur = UISettings::values.profile_full_name;
+                auto res = ConsoleUI::ShowTextInputModal(
+                    this, tr("Full Name"),
+                    tr("Enter your full profile name:"),
+                    cur, 40);
+                if (res) {
+                    UISettings::values.profile_full_name = res->trimmed();
                     config->Save();
-                    auto cfg = Service::CFG::GetModule(system);
+                    row_fullname.val_lbl->setText(GetProfileFullNameText());
+                }
+            });
+
+    connect(row_region.btn, &QPushButton::clicked, this,
+            [this, row_region] {
+                int cur_idx = Settings::values.region_value.GetValue() + 1;
+                const auto region_names = GetProfileRegionNames();
+                if (cur_idx < 0 || cur_idx >= region_names.size()) {
+                    cur_idx = 0;
+                }
+                int selected = ConsoleUI::ShowChoiceModal(
+                    this, tr("Region"),
+                    tr("Select emulated console region:"),
+                    region_names, cur_idx);
+                if (selected >= 0) {
+                    int new_val = selected - 1;
+                    Settings::values.region_value.SetValue(new_val);
+                    UISettings::values.profile_region = new_val;
+                    config->Save();
+                    row_region.val_lbl->setText(GetProfileRegionText());
+                    UpdateBootHomeMenuState();
+                }
+            });
+
+    connect(row_dob.btn, &QPushButton::clicked, this,
+            [this, row_dob] {
+                auto cfg = Service::CFG::GetModule(system);
+                int cur_m = UISettings::values.profile_birthmonth;
+                int cur_d = UISettings::values.profile_birthday;
+                if (cur_m < 1 || cur_m > 12 || cur_d < 1 || cur_d > 31) {
                     if (cfg) {
-                        cfg->SetUsername(u"Me");
+                        auto [m, d] = cfg->GetBirthday();
+                        if (m >= 1 && m <= 12) cur_m = m;
+                        if (d >= 1 && d <= 31) cur_d = d;
+                    }
+                }
+                if (cur_m < 1 || cur_m > 12) cur_m = 1;
+                if (cur_d < 1 || cur_d > 31) cur_d = 1;
+
+                auto res = ConsoleUI::ShowDateModal(
+                    this, tr("Date of Birth"),
+                    tr("Select your birthday:"), cur_m, cur_d);
+                if (res) {
+                    auto [picked_m, picked_d] = *res;
+                    UISettings::values.profile_birthmonth = picked_m;
+                    UISettings::values.profile_birthday = picked_d;
+                    config->Save();
+                    if (cfg) {
+                        cfg->SetBirthday(static_cast<u8>(picked_m), static_cast<u8>(picked_d));
                         cfg->UpdateConfigNANDSavegame();
                     }
-                    val_nickname->setText(QStringLiteral("Me"));
-                    nickname_display->setText(QStringLiteral("Me"));
-                    avatar_label->setPixmap(get_avatar_pixmap(QSize(160, 160), 8));
-                    thumb_avatar->setPixmap(get_avatar_pixmap(QSize(36, 36), 4));
+                    row_dob.val_lbl->setText(GetProfileDobText(system));
+                }
+            });
+
+    connect(row_gender.btn, &QPushButton::clicked, this,
+            [this, row_gender] {
+                int cur = UISettings::values.profile_gender;
+                const auto gender_names = GetProfileGenderNames();
+                if (cur < 0 || cur >= gender_names.size()) cur = 0;
+                int selected = ConsoleUI::ShowChoiceModal(
+                    this, tr("Gender"),
+                    tr("Select gender preference:"),
+                    gender_names, cur);
+                if (selected >= 0) {
+                    UISettings::values.profile_gender = selected;
+                    config->Save();
+                    row_gender.val_lbl->setText(GetProfileGenderText());
+                }
+            });
+
+    connect(row_time_format.btn, &QPushButton::clicked, this,
+            [this, row_time_format] {
+                int cur = (UISettings::values.profile_time_format_24h == 1) ? 1 : 0;
+                const auto time_format_names = GetProfileTimeFormatNames();
+                int selected = ConsoleUI::ShowChoiceModal(
+                    this, tr("Time Format"),
+                    tr("Select clock display format:"),
+                    time_format_names, cur);
+                if (selected >= 0) {
+                    UISettings::values.profile_time_format_24h = (selected == 1 ? 1 : 0);
+                    config->Save();
+                    row_time_format.val_lbl->setText(GetProfileTimeFormatText());
+                    if (home_screen) {
+                        home_screen->ApplyAppearanceSettings();
+                    }
+                }
+            });
+
+    connect(row_language.btn, &QPushButton::clicked, this,
+            [this, retranslate_profile_dialog] {
+                auto cfg = Service::CFG::GetModule(system);
+                int cur_idx = cfg ? static_cast<int>(cfg->GetSystemLanguage())
+                                  : UISettings::values.profile_language;
+                if (cur_idx < 0 || cur_idx >= s_profile_lang_names.size()) cur_idx = 1;
+                int selected = ConsoleUI::ShowChoiceModal(
+                    this, tr("Language"),
+                    tr("Select system language:"),
+                    s_profile_lang_names, cur_idx);
+                if (selected >= 0) {
+                    if (cfg) {
+                        cfg->SetSystemLanguage(static_cast<Service::CFG::SystemLanguage>(selected));
+                        cfg->UpdateConfigNANDSavegame();
+                    }
+                    UISettings::values.profile_language = selected;
+
+                    const QString locale = LocaleFromProfileLanguage(selected);
+
+                    // Apply the language change across all areas of the application:
+                    // 1. Installs translators for main window, menus, status bar, and dialogs
+                    // 2. Retranslates game list and home screen
+                    OnLanguageChanged(locale);
+
+                    // Persist new language settings
+                    config->Save();
+
+                    // 3. Immediately retranslate the active Profile Settings dialog
+                    retranslate_profile_dialog();
+
                     if (home_screen) {
                         home_screen->ApplyAppearanceSettings();
                     }
@@ -4014,6 +4870,12 @@ void GMainWindow::ApplyOverlayButtonTheme() {
     if (auto* overlay_btn = dynamic_cast<OverlayHomeButton*>(home_button)) {
         overlay_btn->SetTheme(white);
     }
+    if (ingame_status) {
+        ingame_status->SetTheme(white);
+    }
+    if (controllers_popover) {
+        controllers_popover->SetTheme(white);
+    }
 }
 
 void GMainWindow::RepositionHomeButton() {
@@ -4023,6 +4885,532 @@ void GMainWindow::RepositionHomeButton() {
     constexpr int Margin = 16;
     const QRect area = ui->centralwidget->rect();
     home_button->move(area.left() + Margin, area.bottom() - home_button->height() - Margin);
+}
+
+void GMainWindow::RepositionInGameStatus() {
+    if (!ingame_status) {
+        return;
+    }
+    constexpr int Margin = 16;
+    const int x = std::max(0, ui->centralwidget->width() - ingame_status->width() - Margin);
+    const int y = Margin;
+    ingame_status->move(x, y);
+}
+
+void GMainWindow::RepositionControllersPopover() {
+    if (!controllers_popover) {
+        return;
+    }
+    constexpr int Margin = 16;
+    constexpr int Gap = 8;
+    const int popover_w = controllers_popover->width();
+    int x = ui->centralwidget->width() - popover_w - Margin;
+    int y = Margin;
+
+    if (emulation_running && ingame_status && ingame_status->isVisible()) {
+        y = ingame_status->geometry().bottom() + Gap;
+        x = ui->centralwidget->width() - popover_w - Margin;
+    } else if (home_screen && home_screen->isVisible() && home_screen->GetBluetoothButton()) {
+        auto* bt_btn = home_screen->GetBluetoothButton();
+        const QPoint btn_pos = bt_btn->mapTo(ui->centralwidget, QPoint(0, 0));
+        int target_x = btn_pos.x() + bt_btn->width() - popover_w + 30;
+        x = std::clamp(target_x, Margin, ui->centralwidget->width() - popover_w - Margin);
+        y = btn_pos.y() + bt_btn->height() + Gap;
+    } else if (ingame_status) {
+        y = ingame_status->geometry().bottom() + Gap;
+    }
+
+    if (x < Margin) {
+        x = Margin;
+    }
+    const int max_y = ui->centralwidget->height() - controllers_popover->height() - Margin;
+    if (y > max_y) {
+        y = std::max(Margin, max_y);
+    }
+    controllers_popover->move(x, y);
+}
+
+void GMainWindow::ToggleControllersPopover() {
+    if (!controllers_popover) {
+        controllers_popover = new ControllersPopoverWidget(this, ui->centralwidget);
+        const bool white = UISettings::values.theme == QStringLiteral("white");
+        controllers_popover->SetTheme(white);
+    }
+    if (controllers_popover->isVisible()) {
+        HideControllersPopover();
+    } else {
+        controllers_popover->RefreshDevices();
+        RepositionControllersPopover();
+        controllers_popover->show();
+        controllers_popover->raise();
+        if (ingame_status) {
+            ingame_status->SetPopoverOpen(true);
+        }
+    }
+}
+
+void GMainWindow::HideControllersPopover() {
+    if (controllers_popover && controllers_popover->isVisible()) {
+        controllers_popover->hide();
+    }
+    if (ingame_status) {
+        ingame_status->SetPopoverOpen(false);
+    }
+}
+
+ControllersPopoverWidget::ControllersPopoverWidget(GMainWindow* main_win, QWidget* parent)
+    : QWidget(parent), main_window(main_win) {
+    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAutoFillBackground(false);
+    setAttribute(Qt::WA_TranslucentBackground, true);
+    setFixedWidth(350);
+
+    root_layout = new QVBoxLayout(this);
+    root_layout->setContentsMargins(16, 14, 16, 14);
+    root_layout->setSpacing(10);
+
+    // Header
+    auto* header_layout = new QHBoxLayout();
+    header_layout->setContentsMargins(0, 0, 0, 0);
+
+    title_label = new QLabel(tr("Bluetooth & Controllers"), this);
+    QFont tf = title_label->font();
+    tf.setPointSize(13);
+    tf.setBold(true);
+    title_label->setFont(tf);
+    header_layout->addWidget(title_label);
+    header_layout->addStretch();
+
+    close_btn = new QPushButton(QStringLiteral("✕"), this);
+    close_btn->setFixedSize(22, 22);
+    close_btn->setCursor(Qt::PointingHandCursor);
+    connect(close_btn, &QPushButton::clicked, this, [this] {
+        if (main_window) {
+            main_window->HideControllersPopover();
+        }
+    });
+    header_layout->addWidget(close_btn);
+    root_layout->addLayout(header_layout);
+
+    // Section 1: Devices
+    devices_header = new QLabel(tr("DEVICES"), this);
+    QFont hf = devices_header->font();
+    hf.setPointSize(9);
+    hf.setBold(true);
+    hf.setLetterSpacing(QFont::AbsoluteSpacing, 0.5);
+    devices_header->setFont(hf);
+    root_layout->addWidget(devices_header);
+
+    devices_container = new QWidget(this);
+    devices_layout = new QVBoxLayout(devices_container);
+    devices_layout->setContentsMargins(0, 0, 0, 0);
+    devices_layout->setSpacing(6);
+    root_layout->addWidget(devices_container);
+
+    // Pair & Refresh button row
+    auto* dev_btn_row = new QHBoxLayout();
+    dev_btn_row->setContentsMargins(0, 0, 0, 0);
+    dev_btn_row->setSpacing(8);
+
+    pair_btn = new QPushButton(tr("Pair via Bluetooth..."), this);
+    pair_btn->setFixedHeight(26);
+    pair_btn->setCursor(Qt::PointingHandCursor);
+    connect(pair_btn, &QPushButton::clicked, this, &ControllersPopoverWidget::OpenBluetoothPreferences);
+    dev_btn_row->addWidget(pair_btn);
+
+    refresh_btn = new QPushButton(tr("⟳ Refresh"), this);
+    refresh_btn->setFixedHeight(26);
+    refresh_btn->setCursor(Qt::PointingHandCursor);
+    connect(refresh_btn, &QPushButton::clicked, this, &ControllersPopoverWidget::RefreshDevices);
+    dev_btn_row->addWidget(refresh_btn);
+
+    root_layout->addLayout(dev_btn_row);
+
+    // Divider
+    divider1 = new QFrame(this);
+    divider1->setFixedHeight(1);
+    root_layout->addWidget(divider1);
+
+    // Section 2: Screen & Window Assignment
+    assign_header = new QLabel(tr("SCREEN & WINDOW ASSIGNMENT"), this);
+    assign_header->setFont(hf);
+    root_layout->addWidget(assign_header);
+
+    // Top Screen Row
+    auto* top_row = new QHBoxLayout();
+    top_row->setContentsMargins(0, 0, 0, 0);
+    top_label = new QLabel(tr("Top Screen (Main):"), this);
+    top_combo = new QComboBox(this);
+    top_combo->setCursor(Qt::PointingHandCursor);
+    connect(top_combo, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            &ControllersPopoverWidget::OnTopProfileChanged);
+    top_row->addWidget(top_label);
+    top_row->addWidget(top_combo, 1);
+    root_layout->addLayout(top_row);
+
+    // Bottom Screen Row
+    auto* bottom_row = new QHBoxLayout();
+    bottom_row->setContentsMargins(0, 0, 0, 0);
+    bottom_label = new QLabel(tr("Bottom Screen (Sub):"), this);
+    bottom_combo = new QComboBox(this);
+    bottom_combo->setCursor(Qt::PointingHandCursor);
+    bottom_combo->addItem(tr("Touchscreen / Direct Mouse"));
+    bottom_combo->addItem(tr("Follow Main Controller"));
+    bottom_combo->addItem(tr("Separate Controller (P2)"));
+    bottom_row->addWidget(bottom_label);
+    bottom_row->addWidget(bottom_combo, 1);
+    root_layout->addLayout(bottom_row);
+
+    // Auto Map button
+    automap_btn = new QPushButton(tr("⚡ Auto-Map Connected Controller"), this);
+    automap_btn->setFixedHeight(28);
+    automap_btn->setCursor(Qt::PointingHandCursor);
+    connect(automap_btn, &QPushButton::clicked, this,
+            &ControllersPopoverWidget::AutoMapPrimaryController);
+    root_layout->addWidget(automap_btn);
+
+    automap_status = new QLabel(this);
+    automap_status->setAlignment(Qt::AlignCenter);
+    automap_status->hide();
+    root_layout->addWidget(automap_status);
+
+    // Divider
+    divider2 = new QFrame(this);
+    divider2->setFixedHeight(1);
+    root_layout->addWidget(divider2);
+
+    // Footer
+    auto* footer_row = new QHBoxLayout();
+    footer_row->setContentsMargins(0, 0, 0, 0);
+
+    bt_settings_link = new QPushButton(tr("Bluetooth Settings..."), this);
+    bt_settings_link->setCursor(Qt::PointingHandCursor);
+    connect(bt_settings_link, &QPushButton::clicked, this,
+            &ControllersPopoverWidget::OpenBluetoothPreferences);
+    footer_row->addWidget(bt_settings_link);
+    footer_row->addStretch();
+
+    all_settings_link = new QPushButton(tr("All Settings..."), this);
+    all_settings_link->setCursor(Qt::PointingHandCursor);
+    connect(all_settings_link, &QPushButton::clicked, this,
+            &ControllersPopoverWidget::OpenControllerSettings);
+    footer_row->addWidget(all_settings_link);
+    root_layout->addLayout(footer_row);
+
+    ApplyStyles();
+    RefreshDevices();
+}
+
+ControllersPopoverWidget::~ControllersPopoverWidget() {
+    if (qApp) {
+        qApp->removeEventFilter(this);
+    }
+}
+
+void ControllersPopoverWidget::SetTheme(bool is_white) {
+    if (white == is_white) {
+        return;
+    }
+    white = is_white;
+    ApplyStyles();
+    RefreshDevices();
+    update();
+}
+
+void ControllersPopoverWidget::ApplyStyles() {
+    const QString fg = white ? QStringLiteral("#1C1C1E") : QStringLiteral("#FFFFFF");
+    const QString sub_fg = white ? QStringLiteral("rgba(60, 60, 67, 0.70)")
+                                 : QStringLiteral("rgba(255, 255, 255, 0.65)");
+    const QString item_bg = white ? QStringLiteral("rgba(0, 0, 0, 0.05)")
+                                  : QStringLiteral("rgba(255, 255, 255, 0.08)");
+    const QString item_hover = white ? QStringLiteral("rgba(0, 0, 0, 0.10)")
+                                     : QStringLiteral("rgba(255, 255, 255, 0.14)");
+    const QString border_color = white ? QStringLiteral("rgba(0, 0, 0, 0.12)")
+                                       : QStringLiteral("rgba(255, 255, 255, 0.12)");
+
+    title_label->setStyleSheet(QStringLiteral("color: %1; background: transparent;").arg(fg));
+    devices_header->setStyleSheet(QStringLiteral("color: %1; background: transparent;").arg(sub_fg));
+    assign_header->setStyleSheet(QStringLiteral("color: %1; background: transparent;").arg(sub_fg));
+    top_label->setStyleSheet(QStringLiteral("color: %1; font-size: 11px; background: transparent;").arg(fg));
+    bottom_label->setStyleSheet(QStringLiteral("color: %1; font-size: 11px; background: transparent;").arg(fg));
+
+    close_btn->setStyleSheet(QStringLiteral(
+        "QPushButton { border-radius: 11px; background-color: %1; color: %2; font-size: 11px; font-weight: bold; border: none; }"
+        "QPushButton:hover { background-color: %3; color: %4; }")
+        .arg(item_bg, sub_fg, item_hover, fg));
+
+    const QString btn_style = QStringLiteral(
+        "QPushButton { background-color: %1; color: %2; border-radius: 6px; padding: 0 10px; font-size: 11px; border: none; font-weight: 500; }"
+        "QPushButton:hover { background-color: %3; }")
+        .arg(item_bg, fg, item_hover);
+    pair_btn->setStyleSheet(btn_style);
+    refresh_btn->setStyleSheet(btn_style);
+
+    const QString div_style = QStringLiteral("background-color: %1; border: none;").arg(border_color);
+    divider1->setStyleSheet(div_style);
+    divider2->setStyleSheet(div_style);
+
+    const QString combo_style = QStringLiteral(
+        "QComboBox { background-color: %1; color: %2; border: 1px solid %3; border-radius: 6px; padding: 3px 8px; font-size: 11px; }"
+        "QComboBox::drop-down { border: none; width: 18px; }"
+        "QComboBox QAbstractItemView { background-color: %4; color: %2; selection-background-color: #007AFF; selection-color: #FFFFFF; border: 1px solid %3; }")
+        .arg(item_bg, fg, border_color, white ? QStringLiteral("#FFFFFF") : QStringLiteral("#24262C"));
+    top_combo->setStyleSheet(combo_style);
+    bottom_combo->setStyleSheet(combo_style);
+
+    automap_btn->setStyleSheet(QStringLiteral(
+        "QPushButton { background-color: #007AFF; color: #FFFFFF; font-weight: 600; font-size: 11px; border-radius: 6px; border: none; }"
+        "QPushButton:hover { background-color: #0062CC; }"
+        "QPushButton:pressed { background-color: #004FB3; }"));
+
+    bt_settings_link->setStyleSheet(QStringLiteral(
+        "QPushButton { color: %1; font-size: 11px; border: none; background: transparent; text-align: left; padding: 2px 0; }"
+        "QPushButton:hover { color: %2; }")
+        .arg(sub_fg, fg));
+
+    all_settings_link->setStyleSheet(QStringLiteral(
+        "QPushButton { color: #007AFF; font-size: 11px; font-weight: 600; border: none; background: transparent; text-align: right; padding: 2px 0; }"
+        "QPushButton:hover { color: #0056B3; }"));
+}
+
+void ControllersPopoverWidget::RefreshDevices() {
+    QLayoutItem* child;
+    while ((child = devices_layout->takeAt(0)) != nullptr) {
+        delete child->widget();
+        delete child;
+    }
+
+    InputCommon::ReloadInputDevices();
+
+    int num_joysticks = 0;
+#ifdef HAVE_SDL2
+    num_joysticks = SDL_NumJoysticks();
+    for (int i = 0; i < num_joysticks; ++i) {
+        auto* row = new QWidget(devices_container);
+        auto* row_layout = new QHBoxLayout(row);
+        row_layout->setContentsMargins(4, 2, 4, 2);
+        row_layout->setSpacing(8);
+
+        auto* icon = new DeviceIconWidget(true, white, row);
+        row_layout->addWidget(icon);
+
+        const char* name = SDL_JoystickNameForIndex(i);
+        QString dev_name = name ? QString::fromUtf8(name) : tr("Game Controller %1").arg(i + 1);
+        auto* name_label = new QLabel(dev_name, row);
+        name_label->setStyleSheet(QStringLiteral("color: %1; font-weight: 600; font-size: 12px; background: transparent;").arg(white ? QStringLiteral("#1C1C1E") : QStringLiteral("#FFFFFF")));
+        row_layout->addWidget(name_label);
+        row_layout->addStretch();
+
+        auto* conn_label = new QLabel(tr("Connected"), row);
+        conn_label->setStyleSheet(QStringLiteral("color: #34C759; font-weight: 600; font-size: 11px; background: transparent;"));
+        row_layout->addWidget(conn_label);
+
+        devices_layout->addWidget(row);
+    }
+#endif
+    if (num_joysticks == 0) {
+        auto* row = new QWidget(devices_container);
+        auto* row_layout = new QHBoxLayout(row);
+        row_layout->setContentsMargins(4, 2, 4, 2);
+        row_layout->setSpacing(8);
+
+        auto* icon = new DeviceIconWidget(false, white, row);
+        row_layout->addWidget(icon);
+
+        auto* name_label = new QLabel(tr("Built-in Keyboard"), row);
+        name_label->setStyleSheet(QStringLiteral("color: %1; font-weight: 600; font-size: 12px; background: transparent;").arg(white ? QStringLiteral("#1C1C1E") : QStringLiteral("#FFFFFF")));
+        row_layout->addWidget(name_label);
+        row_layout->addStretch();
+
+        auto* conn_label = new QLabel(tr("Active"), row);
+        conn_label->setStyleSheet(QStringLiteral("color: #34C759; font-weight: 600; font-size: 11px; background: transparent;"));
+        row_layout->addWidget(conn_label);
+
+        devices_layout->addWidget(row);
+
+        auto* hint = new QLabel(tr("No gamepad connected. Pair a controller below."), devices_container);
+        hint->setStyleSheet(QStringLiteral("font-size: 11px; color: %1; background: transparent;").arg(white ? QStringLiteral("#8E8E93") : QStringLiteral("#98989D")));
+        devices_layout->addWidget(hint);
+    }
+
+    suppress_profile_events = true;
+    top_combo->clear();
+    for (const auto& profile : Settings::values.input_profiles) {
+        top_combo->addItem(QString::fromStdString(profile.name));
+    }
+    if (Settings::values.current_input_profile_index >= 0 &&
+        Settings::values.current_input_profile_index < top_combo->count()) {
+        top_combo->setCurrentIndex(Settings::values.current_input_profile_index);
+    }
+    suppress_profile_events = false;
+
+    adjustSize();
+    if (main_window) {
+        main_window->RepositionControllersPopover();
+    }
+}
+
+void ControllersPopoverWidget::OpenBluetoothPreferences() {
+#ifdef __APPLE__
+    QProcess::startDetached(QStringLiteral("open"),
+                           {QStringLiteral("x-apple.systempreferences:com.apple.Bluetooth")});
+#endif
+}
+
+void ControllersPopoverWidget::OpenControllerSettings() {
+    if (main_window) {
+        main_window->HideControllersPopover();
+        main_window->ShowConfigureOverlay(2, true);
+    }
+}
+
+void ControllersPopoverWidget::OnTopProfileChanged(int index) {
+    if (suppress_profile_events || index < 0 ||
+        index >= static_cast<int>(Settings::values.input_profiles.size())) {
+        return;
+    }
+    Settings::values.current_input_profile_index = index;
+    Settings::LoadProfile(index);
+    if (main_window && main_window->GetConfig()) {
+        main_window->GetConfig()->Save();
+    }
+    if (main_window) {
+        main_window->GetSystem().ApplySettings();
+    }
+    InputCommon::ReloadInputDevices();
+}
+
+void ControllersPopoverWidget::AutoMapPrimaryController() {
+#ifdef HAVE_SDL2
+    if (SDL_NumJoysticks() == 0) {
+        automap_status->setText(tr("No gamepad connected to map"));
+        automap_status->setStyleSheet(QStringLiteral("color: #FF9500; font-size: 11px; background: transparent;"));
+        automap_status->show();
+        adjustSize();
+        if (main_window) {
+            main_window->RepositionControllersPopover();
+        }
+        return;
+    }
+    SDL_Joystick* js = SDL_JoystickOpen(0);
+    if (!js) {
+        automap_status->setText(tr("Unable to open controller"));
+        automap_status->setStyleSheet(QStringLiteral("color: #FF3B30; font-size: 11px; background: transparent;"));
+        automap_status->show();
+        adjustSize();
+        if (main_window) {
+            main_window->RepositionControllersPopover();
+        }
+        return;
+    }
+    char guid_str[64] = {0};
+    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(js), guid_str, sizeof(guid_str));
+    Common::ParamPackage params;
+    params.Set("engine", "sdl");
+    params.Set("port", 0);
+    params.Set("guid", guid_str);
+
+    bool mapped = false;
+    for (int b = 0; b < Settings::NativeButton::NumButtons; ++b) {
+        auto bind = InputCommon::GetControllerButtonBinds(params, b);
+        if (bind.Has("engine")) {
+            Settings::values.current_input_profile.buttons[b] = bind.Serialize();
+            mapped = true;
+        }
+    }
+    for (int a = 0; a < Settings::NativeAnalog::NumAnalogs; ++a) {
+        auto bind = InputCommon::GetControllerAnalogBinds(params, a);
+        if (bind.Has("engine")) {
+            Settings::values.current_input_profile.analogs[a] = bind.Serialize();
+            mapped = true;
+        }
+    }
+    SDL_JoystickClose(js);
+
+    if (mapped) {
+        Settings::SaveProfile(Settings::values.current_input_profile_index);
+        if (main_window && main_window->GetConfig()) {
+            main_window->GetConfig()->Save();
+        }
+        if (main_window) {
+            main_window->GetSystem().ApplySettings();
+        }
+        InputCommon::ReloadInputDevices();
+        automap_status->setText(tr("✓ Controller auto-mapped to 3DS controls!"));
+        automap_status->setStyleSheet(QStringLiteral("color: #34C759; font-size: 11px; font-weight: bold; background: transparent;"));
+        automap_status->show();
+    } else {
+        automap_status->setText(tr("Auto-mapping unsupported for this controller"));
+        automap_status->setStyleSheet(QStringLiteral("color: #FF9500; font-size: 11px; background: transparent;"));
+        automap_status->show();
+    }
+#else
+    automap_status->setText(tr("SDL2 not enabled in this build"));
+    automap_status->setStyleSheet(QStringLiteral("color: #FF9500; font-size: 11px; background: transparent;"));
+    automap_status->show();
+#endif
+    adjustSize();
+    if (main_window) {
+        main_window->RepositionControllersPopover();
+    }
+}
+
+void ControllersPopoverWidget::paintEvent(QPaintEvent* event) {
+    Q_UNUSED(event);
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QColor bg = white ? QColor(255, 255, 255, 248) : QColor(28, 30, 36, 245);
+    const QColor border = white ? QColor(0, 0, 0, 30) : QColor(255, 255, 255, 30);
+
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    p.setBrush(bg);
+    p.setPen(QPen(border, 1.0));
+    p.drawRoundedRect(r, 14.0, 14.0);
+}
+
+bool ControllersPopoverWidget::eventFilter(QObject* watched, QEvent* event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        const QPoint gpos = me->globalPosition().toPoint();
+        const QPoint local_pop = mapFromGlobal(gpos);
+        if (!rect().contains(local_pop)) {
+            if (main_window && main_window->GetInGameStatus()) {
+                auto* status_widget = main_window->GetInGameStatus();
+                if (status_widget->isVisible() &&
+                    status_widget->rect().contains(status_widget->mapFromGlobal(gpos))) {
+                    return false;
+                }
+            }
+            if (main_window && main_window->GetHomeScreen()) {
+                auto* hs = main_window->GetHomeScreen();
+                if (hs->isVisible() && hs->GetBluetoothButton()) {
+                    auto* bt_btn = hs->GetBluetoothButton();
+                    if (bt_btn->rect().contains(bt_btn->mapFromGlobal(gpos))) {
+                        return false;
+                    }
+                }
+            }
+            if (main_window) {
+                main_window->HideControllersPopover();
+            }
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void ControllersPopoverWidget::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    if (qApp) {
+        qApp->installEventFilter(this);
+    }
+}
+
+void ControllersPopoverWidget::hideEvent(QHideEvent* event) {
+    if (qApp) {
+        qApp->removeEventFilter(this);
+    }
+    QWidget::hideEvent(event);
 }
 
 void GMainWindow::RepositionScreenDivider() {
@@ -4943,6 +6331,17 @@ void GMainWindow::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
     RepositionSettingsOverlay();
     RepositionHomeButton();
+    if (home_button && emulation_running) {
+        home_button->raise();
+    }
+    RepositionInGameStatus();
+    if (ingame_status && emulation_running) {
+        ingame_status->raise();
+    }
+    RepositionControllersPopover();
+    if (controllers_popover && controllers_popover->isVisible()) {
+        controllers_popover->raise();
+    }
     if (custom_screen_split_ratio >= 0.0) {
         // custom_top/bottom_* are absolute pixel positions, not scaled to the window — once
         // the user has dragged the divider at least once, the chosen ratio has to be
@@ -5169,10 +6568,47 @@ bool GMainWindow::ConfirmClose() {
         return true;
     }
 
-    QMessageBox::StandardButton answer =
-        QMessageBox::question(this, QStringLiteral("Extendo"), tr("Would you like to exit now?"),
-                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    return answer != QMessageBox::No;
+    const bool was_home_visible = home_button && home_button->isVisible();
+    const bool was_status_visible = ingame_status && ingame_status->isVisible();
+    HideControllersPopover();
+    if (was_home_visible) {
+        home_button->hide();
+    }
+    if (was_status_visible) {
+        ingame_status->hide();
+    }
+
+    const bool was_running = emu_thread && emu_thread->IsRunning();
+    if (was_running) {
+        OnPauseGame();
+    }
+
+    const auto choice = ConsoleUI::ShowConfirmModal(
+        this, QString(),
+        tr("Do you want to save your progress before exiting?\nSaving creates an auto-resume state so you can continue right where you left off."),
+        tr("Save & Quit"), tr("Quit"), tr("Cancel"));
+
+    if (choice == ConsoleUI::ActionChoice::Primary) {
+        SaveAutoResumeState();
+        return true;
+    } else if (choice == ConsoleUI::ActionChoice::Secondary) {
+        const auto resume_path = Core::GetSaveStatePath(game_title_id, 0, Core::AutoResumeSlot);
+        FileUtil::Delete(resume_path);
+        return true;
+    } else {
+        if (was_home_visible) {
+            home_button->show();
+            home_button->raise();
+        }
+        if (was_status_visible) {
+            ingame_status->show();
+            ingame_status->raise();
+        }
+        if (was_running) {
+            OnResumeGame(false);
+        }
+        return false;
+    }
 }
 
 void GMainWindow::closeEvent(QCloseEvent* event) {
@@ -5414,6 +6850,13 @@ void GMainWindow::LoadTranslation() {
     const QString lang_en = QStringLiteral("en");
     const QString languages_dir = QStringLiteral(":/languages/");
 
+    // If language is empty, but profile_language is configured to a non-English language,
+    // initialize from profile_language so they stay in sync.
+    if (UISettings::values.language.isEmpty() && UISettings::values.profile_language >= 0 &&
+        UISettings::values.profile_language != 1) {
+        UISettings::values.language = LocaleFromProfileLanguage(UISettings::values.profile_language);
+    }
+
     // Workaround for incorrect Qt system language detection
     // TODO: Allow the "<System>" option to actually be selected rather than overriding the
     //       selected language option? Current behaviour is better than the issue it fixes,
@@ -5468,16 +6911,30 @@ void GMainWindow::LoadTranslation() {
 }
 
 void GMainWindow::OnLanguageChanged(const QString& locale) {
-    if (UISettings::values.language != QStringLiteral("en")) {
-        qApp->removeTranslator(&qtTranslator);
-        qApp->removeTranslator(&citraTranslator);
-    }
+    qApp->removeTranslator(&qtTranslator);
+    qApp->removeTranslator(&citraTranslator);
 
     UISettings::values.language = locale;
     LoadTranslation();
+    QLocale::setDefault(locale.isEmpty() ? QLocale::system() : QLocale(locale));
     ui->retranslateUi(this);
     RetranslateStatusBar();
     UpdateWindowTitle();
+    if (game_list) {
+        game_list->RetranslateUI();
+    }
+    if (home_screen) {
+        home_screen->RetranslateUI();
+    }
+
+    int p_lang = ProfileLanguageFromLocale(locale);
+    if (p_lang != -1) {
+        UISettings::values.profile_language = p_lang;
+        if (auto cfg = Service::CFG::GetModule(system)) {
+            cfg->SetSystemLanguage(static_cast<Service::CFG::SystemLanguage>(p_lang));
+            cfg->UpdateConfigNANDSavegame();
+        }
+    }
 }
 
 void GMainWindow::OnConfigurePerGame() {

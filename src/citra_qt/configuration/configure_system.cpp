@@ -10,6 +10,7 @@
 #include <QtConcurrent/QtConcurrentMap>
 #include "citra_qt/configuration/configuration_shared.h"
 #include "citra_qt/configuration/configure_system.h"
+#include "citra_qt/console_modal.h"
 #include "common/file_util.h"
 #include "common/settings.h"
 #include "core/core.h"
@@ -566,15 +567,14 @@ void ConfigureSystem::UpdateInitTicks(int init_ticks_type) {
 
 void ConfigureSystem::RefreshConsoleID() {
     ui->button_regenerate_console_id->setEnabled(false);
-    QMessageBox::StandardButton reply;
     QString warning_text =
         tr("This will replace your current virtual 3DS console ID with a new one. "
            "Your current virtual 3DS console ID will not be recoverable. "
            "This might have unexpected effects in applications. This might fail "
            "if you use an outdated config save. Continue?");
-    reply =
-        QMessageBox::warning(this, tr("Warning"), warning_text, QMessageBox::No | QMessageBox::Yes);
-    if (reply == QMessageBox::No) {
+    const auto choice = ConsoleUI::ShowConfirmModal(
+        this, tr("Warning"), warning_text, tr("Continue"), {}, tr("Cancel"));
+    if (choice != ConsoleUI::ActionChoice::Primary) {
         ui->button_regenerate_console_id->setEnabled(true);
         return;
     }
@@ -589,13 +589,12 @@ void ConfigureSystem::RefreshConsoleID() {
 
 void ConfigureSystem::RefreshMAC() {
     ui->button_regenerate_mac->setEnabled(false);
-    QMessageBox::StandardButton reply;
     QString warning_text = tr("This will replace your current MAC address with a new one. "
                               "It is not recommended to do this if you got the MAC address from "
                               "your real console using the setup tool. Continue?");
-    reply =
-        QMessageBox::warning(this, tr("Warning"), warning_text, QMessageBox::No | QMessageBox::Yes);
-    if (reply == QMessageBox::No) {
+    const auto choice = ConsoleUI::ShowConfirmModal(
+        this, tr("Warning"), warning_text, tr("Continue"), {}, tr("Cancel"));
+    if (choice != ConsoleUI::ActionChoice::Primary) {
         ui->button_regenerate_mac->setEnabled(true);
         return;
     }
@@ -607,7 +606,6 @@ void ConfigureSystem::RefreshMAC() {
 
 void ConfigureSystem::UnlinkConsole() {
     ui->button_unlink_console->setEnabled(false);
-    QMessageBox::StandardButton reply;
     QString warning_text =
         tr("This action will unlink your real console from Azahar, with the following "
            "consequences:<br><ul><li>Your OTP, SecureInfo and LocalFriendCodeSeed will be removed "
@@ -615,9 +613,9 @@ void ConfigureSystem::UnlinkConsole() {
            "NNID/PNID account.</li><li>System files and eshop titles obtained through Azahar will "
            "become inaccessible until the same console is linked again (save data will not be "
            "lost).</li></ul><br>Continue?");
-    reply =
-        QMessageBox::warning(this, tr("Warning"), warning_text, QMessageBox::No | QMessageBox::Yes);
-    if (reply == QMessageBox::No) {
+    const auto choice = ConsoleUI::ShowConfirmModal(
+        this, tr("Warning"), warning_text, tr("Continue"), {}, tr("Cancel"));
+    if (choice != ConsoleUI::ActionChoice::Primary) {
         ui->button_unlink_console->setEnabled(true);
         return;
     }

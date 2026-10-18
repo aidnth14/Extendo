@@ -23,9 +23,12 @@ struct SaveStateInfo {
 };
 
 constexpr u32 SaveStateSlotCount = 11; // Maximum count of savestate slots
+constexpr u32 AutoResumeSlot = 99;     // Dedicated slot for auto-resume suspend state
 
 std::vector<SaveStateInfo> ListSaveStates(u64 program_id, u64 movie_id);
 
 SaveStateInfo GetSaveStateInfo(u64 program_id, u64 movie_id, u32 slot);
+
+std::string GetSaveStatePath(u64 program_id, u64 movie_id, u32 slot);
 
 } // namespace Core

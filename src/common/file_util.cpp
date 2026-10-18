@@ -1030,7 +1030,20 @@ void SetUserPath(const std::string& path) {
     g_paths.emplace(UserPath::ShaderDir, user_path + SHADER_DIR DIR_SEP);
     g_paths.emplace(UserPath::DumpDir, user_path + DUMP_DIR DIR_SEP);
     g_paths.emplace(UserPath::LoadDir, user_path + LOAD_DIR DIR_SEP);
+#if defined(__APPLE__)
+    auto bundle_dir = GetBundleDirectory();
+    std::string hidden_bundle_states;
+    if (bundle_dir) {
+        hidden_bundle_states = bundle_dir.value() + "Contents" DIR_SEP "Resources" DIR_SEP ".states" DIR_SEP;
+    }
+    if (!hidden_bundle_states.empty() && (FileUtil::IsDirectory(hidden_bundle_states) || FileUtil::CreateFullPath(hidden_bundle_states))) {
+        g_paths.emplace(UserPath::StatesDir, hidden_bundle_states);
+    } else {
+        g_paths.emplace(UserPath::StatesDir, user_path + STATES_DIR DIR_SEP);
+    }
+#else
     g_paths.emplace(UserPath::StatesDir, user_path + STATES_DIR DIR_SEP);
+#endif
     g_paths.emplace(UserPath::IconsDir, user_path + ICONS_DIR DIR_SEP);
     g_default_paths = g_paths;
 }

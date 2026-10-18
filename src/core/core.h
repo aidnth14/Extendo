@@ -389,6 +389,16 @@ public:
         return save_state_status;
     }
 
+    bool IsSignalPending(Signal signal) const {
+        std::scoped_lock lock{signal_mutex};
+        return current_signal == signal;
+    }
+
+    bool IsSaveStatePending() const {
+        return save_state_request_status == SaveStateStatus::SAVING ||
+               save_state_request_status == SaveStateStatus::LOADING;
+    }
+
     void SaveState(u32 slot) const;
 
     void LoadState(u32 slot);
@@ -552,7 +562,7 @@ private:
     std::optional<u8> m_mem_mode;
     u64 title_id;
 
-    std::mutex signal_mutex;
+    mutable std::mutex signal_mutex;
     Signal current_signal;
     u32 signal_param;
 

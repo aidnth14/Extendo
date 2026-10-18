@@ -38,7 +38,7 @@ static_assert(sizeof(CSTHeader) == 256, "CSTHeader should be 256 bytes");
 
 constexpr std::array<u8, 4> header_magic_bytes{{'C', 'S', 'T', 0x1B}};
 
-static std::string GetSaveStatePath(u64 program_id, u64 movie_id, u32 slot) {
+std::string GetSaveStatePath(u64 program_id, u64 movie_id, u32 slot) {
     if (movie_id) {
         return fmt::format("{}{:016X}.movie{:016X}.{:02d}.cst",
                            FileUtil::GetUserPath(FileUtil::UserPath::StatesDir), program_id,
@@ -159,7 +159,7 @@ void System::SaveState(u32 slot) const {
 
     const std::string& str{sstream.str()};
     const auto data = std::span<const u8>{reinterpret_cast<const u8*>(str.data()), str.size()};
-    auto buffer = Common::Compression::CompressDataZSTDDefault(data);
+    auto buffer = Common::Compression::CompressDataZSTD(data, 9);
 
     const u64 movie_id = movie.GetCurrentMovieID();
     const auto path = GetSaveStatePath(title_id, movie_id, slot);
@@ -250,7 +250,7 @@ std::vector<u8> System::SaveStateBuffer() const {
 
     const std::string& str{sstream.str()};
     const auto data = std::span<const u8>{reinterpret_cast<const u8*>(str.data()), str.size()};
-    auto buffer = Common::Compression::CompressDataZSTDDefault(data);
+    auto buffer = Common::Compression::CompressDataZSTD(data, 9);
 
     CSTHeader header{};
     header.filetype = header_magic_bytes;

@@ -1429,17 +1429,17 @@ Would you like to ignore the error and continue?</source>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="132"/>
         <source>SPIR-V shader generation</source>
-        <translation type="unfinished"></translation>
+        <translation>SPIR-V シェーダー生成</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="139"/>
         <source>Disable GLSL -&gt; SPIR-V optimizer</source>
-        <translation type="unfinished"></translation>
+        <translation>GLSL -&gt; SPIR-V 最適化を無効化</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="142"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Disables the SPIR-V optimization pass, reducing stuttering considerably while barely affecting performance.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;SPIR-V最適化パスを無効化し、パフォーマンスへの影響を最小限に抑えつつカクつきを大幅に軽減します。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="152"/>
@@ -1454,17 +1454,17 @@ Would you like to ignore the error and continue?</source>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="176"/>
         <source>Enable hardware shader</source>
-        <translation type="unfinished"></translation>
+        <translation>ハードウェアシェーダーを有効化</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="198"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Correctly handle all edge cases in multiplication operation in shaders. &lt;/p&gt;&lt;p&gt;Some applications require this to be enabled for the hardware shader to render properly.&lt;/p&gt;&lt;p&gt;However this would reduce performance in most applications.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;シェーダー内の乗算処理のエッジケースを正確に処理します。&lt;/p&gt;&lt;p&gt;一部のアプリケーションではハードウェアシェーダーを正しく描画するためにこれが必要ですが、多くのアプリケーションでパフォーマンスが低下します。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="201"/>
         <source>Accurate multiplication</source>
-        <translation type="unfinished"></translation>
+        <translation>正確な乗算処理</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="214"/>
@@ -1474,27 +1474,27 @@ Would you like to ignore the error and continue?</source>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="217"/>
         <source>Enable shader JIT</source>
-        <translation type="unfinished"></translation>
+        <translation>シェーダーJITを有効化</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="224"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Compile shaders using background threads to avoid shader compilation stutter. Expect temporary graphical glitches&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;シェーダーをバックグラウンドスレッドでコンパイルし、コンパイルによるカクつきを防ぎます。一時的に描画乱れが発生する場合があります。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="227"/>
         <source>Enable async shader compilation</source>
-        <translation type="unfinished"></translation>
+        <translation>非同期シェーダーコンパイルを有効化</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="234"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Perform presentation on separate threads. Improves performance when using Vulkan in most applications. Adds ~1 frame of input lag.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;プレゼンテーションを別スレッドで処理します。Vulkan使用時の多くのアプリケーションでパフォーマンスが向上します（入力遅延が約1フレーム増加します）。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="237"/>
         <source>Enable async presentation</source>
-        <translation type="unfinished"></translation>
+        <translation>非同期プレゼンテーションを有効化</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="247"/>
@@ -1504,27 +1504,27 @@ Would you like to ignore the error and continue?</source>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="268"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Overrides the sampling filter used by applications. This can be useful in certain cases with poorly behaved applications when upscaling. If unsure, set this to Application Controlled&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;アプリケーションが使用するサンプリングフィルターをオーバーライドします。アップスケール時に描画が崩れるアプリケーションに有効です。不明な場合は「アプリケーション制御」に設定してください。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="271"/>
         <source>Texture Sampling</source>
-        <translation type="unfinished"></translation>
+        <translation>テクスチャサンプリング</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="279"/>
         <source>Application Controlled</source>
-        <translation type="unfinished"></translation>
+        <translation>アプリケーション制御</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="284"/>
         <source>Nearest Neighbor</source>
-        <translation type="unfinished"></translation>
+        <translation>最近傍補間 (Nearest Neighbor)</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="289"/>
         <source>Linear</source>
-        <translation type="unfinished"></translation>
+        <translation>線形補間 (Linear)</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="300"/>
@@ -1534,37 +1534,37 @@ Would you like to ignore the error and continue?</source>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="303"/>
         <source>Use disk shader cache</source>
-        <translation type="unfinished"></translation>
+        <translation>ディスクシェーダーキャッシュを使用</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="310"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;VSync prevents the screen from tearing, but some graphics cards have lower performance with VSync enabled. Keep it enabled if you don&apos;t notice a performance difference.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;VSyncは画面のテアリングを防ぎますが、一部のグラフィックカードではパフォーマンスが低下する場合があります。差を感じない場合は有効のままにしてください。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="313"/>
         <source>Enable VSync</source>
-        <translation>Vsync有効化</translation>
+        <translation>垂直同期 (VSync) を有効化</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="320"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;This detects and skips the presentation of frames that are not unique.  It also allows external frame generation tools to work correctly with 30fps games. Works in OpenGL and Vulkan.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;重複したフレームの表示を検出してスキップします。外部フレーム生成ツールが30fpsのゲームで正しく動作するようにもなります。OpenGLおよびVulkanで機能します。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="323"/>
         <source>Skip Presenting Duplicate Frames</source>
-        <translation type="unfinished"></translation>
+        <translation>重複フレームの描画をスキップ</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="330"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;When enabled, this setting detects when the refresh rate of the screen is below that of the 3DS, and when it is, disables VSync automatically to avoid emulation speed being forced below 100%.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;有効にすると、画面のリフレッシュレートが3DSのそれを下回っていることを検出し、エミュレーション速度が100%未満に落ちるのを防ぐためにVSyncを自動的に無効化します。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="333"/>
         <source>Enable display refresh rate detection</source>
-        <translation type="unfinished"></translation>
+        <translation>ディスプレイリフレッシュレート検出を有効化</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="356"/>
@@ -1579,22 +1579,22 @@ Would you like to ignore the error and continue?</source>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="369"/>
         <source>Delay Application Render Thread</source>
-        <translation type="unfinished"></translation>
+        <translation>描画スレッド遅延</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="372"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Delays the emulated application render thread the specified amount of milliseconds every time it submits render commands to the GPU.&lt;/p&gt;&lt;p&gt;Adjust this feature in the (very few) dynamic framerate applications to fix performance issues.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;GPUに描画コマンドを送信するたびに、エミュレートされたアプリケーション描画スレッドを指定したミリ秒だけ遅延させます。&lt;/p&gt;&lt;p&gt;可変フレームレートのゲームでパフォーマンスを安定させるために調整します。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="417"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Delays GPU completion events based on measurements taken from real hardware, so that games have more realistic GPU time measurements. Helps stabilize dynamic FPS games. Disabling this feature may improve performance in some rare cases at the cost of stability.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;実機測定値に基づいてGPU完了イベントを遅延させ、より現実に近いGPU時間測定値を提供します。可変FPSのゲームを安定させるのに役立ちます。&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="../../src/citra_qt/configuration/configure_graphics.ui" line="420"/>
         <source>Simulate 3DS GPU timings</source>
-        <translation type="unfinished"></translation>
+        <translation>3DS GPUタイミングをシミュレート</translation>
     </message>
 </context>
 <context>
@@ -5004,6 +5004,174 @@ Would you like to download it?</source>
         <source>Secondary Window</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>User Settings</source>
+        <translation>ユーザー設定</translation>
+    </message>
+    <message>
+        <source>Profile Settings</source>
+        <translation>プロフィール設定</translation>
+    </message>
+    <message>
+        <source>Nick Name</source>
+        <translation>ニックネーム</translation>
+    </message>
+    <message>
+        <source>Full Name</source>
+        <translation>氏名</translation>
+    </message>
+    <message>
+        <source>Region</source>
+        <translation>地域</translation>
+    </message>
+    <message>
+        <source>Date of Birth</source>
+        <translation>生年月日</translation>
+    </message>
+    <message>
+        <source>Gender</source>
+        <translation>性別</translation>
+    </message>
+    <message>
+        <source>Time Format</source>
+        <translation>時間表示</translation>
+    </message>
+    <message>
+        <source>Language</source>
+        <translation>言語</translation>
+    </message>
+    <message>
+        <source>Mii Profile</source>
+        <translation>Mii プロフィール</translation>
+    </message>
+    <message>
+        <source>Back</source>
+        <translation>戻る</translation>
+    </message>
+    <message>
+        <source>Not Set</source>
+        <translation>未設定</translation>
+    </message>
+    <message>
+        <source>Auto-select</source>
+        <translation>自動選択</translation>
+    </message>
+    <message>
+        <source>Japan</source>
+        <translation>日本</translation>
+    </message>
+    <message>
+        <source>USA</source>
+        <translation>アメリカ</translation>
+    </message>
+    <message>
+        <source>Europe</source>
+        <translation>欧州</translation>
+    </message>
+    <message>
+        <source>Australia</source>
+        <translation>オーストラリア</translation>
+    </message>
+    <message>
+        <source>China</source>
+        <translation>中国</translation>
+    </message>
+    <message>
+        <source>Korea</source>
+        <translation>韓国</translation>
+    </message>
+    <message>
+        <source>Taiwan</source>
+        <translation>台湾</translation>
+    </message>
+    <message>
+        <source>Male</source>
+        <translation>男性</translation>
+    </message>
+    <message>
+        <source>Female</source>
+        <translation>女性</translation>
+    </message>
+    <message>
+        <source>Not Specified</source>
+        <translation>指定しない</translation>
+    </message>
+    <message>
+        <source>12-Hour (AM/PM)</source>
+        <translation>12時間 (午前/午後)</translation>
+    </message>
+    <message>
+        <source>24-Hour</source>
+        <translation>24時間</translation>
+    </message>
+    <message>
+        <source>Edit / Create</source>
+        <translation>作成 / 編集</translation>
+    </message>
+    <message>
+        <source>January 1</source>
+        <translation>1月1日</translation>
+    </message>
+    <message>
+        <source>MMMM d</source>
+        <translation>M月d日</translation>
+    </message>
+    <message>
+        <source>Me</source>
+        <translation>自分</translation>
+    </message>
+    <message>
+        <source>Profile Icon</source>
+        <translation>プロフィールアイコン</translation>
+    </message>
+    <message>
+        <source>Create a custom cel-shaded Mii character or choose an image:</source>
+        <translation>カスタムMiiキャラクターを作成するか、画像を選択してください:</translation>
+    </message>
+    <message>
+        <source>🎨 Mii Maker (Character Creator)</source>
+        <translation>🎨 Mii 作成 (キャラクターエディター)</translation>
+    </message>
+    <message>
+        <source>📁 Choose Image from Computer</source>
+        <translation>📁 コンピュータから画像を選択</translation>
+    </message>
+    <message>
+        <source>Select Profile Icon</source>
+        <translation>プロフィールアイコンの選択</translation>
+    </message>
+    <message>
+        <source>Images (*.png *.jpg *.jpeg *.webp *.bmp)</source>
+        <translation>画像ファイル (*.png *.jpg *.jpeg *.webp *.bmp)</translation>
+    </message>
+    <message>
+        <source>Enter a nickname for your profile (up to 10 characters):</source>
+        <translation>プロフィールのニックネームを入力してください (最大10文字):</translation>
+    </message>
+    <message>
+        <source>Enter your full profile name:</source>
+        <translation>プロフィールの氏名を入力してください:</translation>
+    </message>
+    <message>
+        <source>Select emulated console region:</source>
+        <translation>エミュレートする本体の地域を選択してください:</translation>
+    </message>
+    <message>
+        <source>Select your birthday:</source>
+        <translation>誕生日を選択してください:</translation>
+    </message>
+    <message>
+        <source>Select gender preference:</source>
+        <translation>性別の設定を選択してください:</translation>
+    </message>
+    <message>
+        <source>Select clock display format:</source>
+        <translation>時計の表示形式を選択してください:</translation>
+    </message>
+    <message>
+        <source>Select system language:</source>
+        <translation>システム言語を選択してください:</translation>
+    </message>
 </context>
 <context>
     <name>GPUCommandListModel</name>
@@ -7133,6 +7301,62 @@ They may have left the room.</source>
         <source>none</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Back</source>
+        <translation>戻る</translation>
+    </message>
+    <message>
+        <source>OK</source>
+        <translation>決定</translation>
+    </message>
+    <message>
+        <source>January</source>
+        <translation>1月</translation>
+    </message>
+    <message>
+        <source>February</source>
+        <translation>2月</translation>
+    </message>
+    <message>
+        <source>March</source>
+        <translation>3月</translation>
+    </message>
+    <message>
+        <source>April</source>
+        <translation>4月</translation>
+    </message>
+    <message>
+        <source>May</source>
+        <translation>5月</translation>
+    </message>
+    <message>
+        <source>June</source>
+        <translation>6月</translation>
+    </message>
+    <message>
+        <source>July</source>
+        <translation>7月</translation>
+    </message>
+    <message>
+        <source>August</source>
+        <translation>8月</translation>
+    </message>
+    <message>
+        <source>September</source>
+        <translation>9月</translation>
+    </message>
+    <message>
+        <source>October</source>
+        <translation>10月</translation>
+    </message>
+    <message>
+        <source>November</source>
+        <translation>11月</translation>
+    </message>
+    <message>
+        <source>December</source>
+        <translation>12月</translation>
+    </message>
 </context>
 <context>
     <name>QtKeyboard</name>
@@ -7601,6 +7825,77 @@ If you wish to clean up the files which were left in the old data location, you 
         <location filename="../../src/citra_qt/debugger/wait_tree.cpp" line="443"/>
         <source>Wait Tree</source>
         <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>HomeScreenWidget</name>
+    <message>
+        <source>Games</source>
+        <translation>ゲーム</translation>
+    </message>
+    <message>
+        <source>Add Game Directory</source>
+        <translation>ゲームフォルダを追加</translation>
+    </message>
+    <message>
+        <source>Profile</source>
+        <translation>プロフィール</translation>
+    </message>
+    <message>
+        <source>Settings</source>
+        <translation>設定</translation>
+    </message>
+    <message>
+        <source>Set Background Image</source>
+        <translation>背景画像を設定</translation>
+    </message>
+    <message>
+        <source>Quit</source>
+        <translation>終了</translation>
+    </message>
+    <message>
+        <source>A Select</source>
+        <translation>選択</translation>
+    </message>
+    <message>
+        <source>B Back</source>
+        <translation>戻る</translation>
+    </message>
+    <message>
+        <source>X Remove</source>
+        <translation>削除</translation>
+    </message>
+    <message>
+        <source>Y Details</source>
+        <translation>詳細</translation>
+    </message>
+    <message>
+        <source>+ Add</source>
+        <translation>追加</translation>
+    </message>
+    <message>
+        <source>- Settings</source>
+        <translation>設定</translation>
+    </message>
+    <message>
+        <source>Select</source>
+        <translation>選択</translation>
+    </message>
+    <message>
+        <source>Back</source>
+        <translation>戻る</translation>
+    </message>
+    <message>
+        <source>Remove</source>
+        <translation>削除</translation>
+    </message>
+    <message>
+        <source>Details</source>
+        <translation>詳細</translation>
+    </message>
+    <message>
+        <source>Add</source>
+        <translation>追加</translation>
     </message>
 </context>
 </TS>

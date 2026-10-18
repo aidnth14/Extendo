@@ -403,6 +403,37 @@ QPixmap RenderBatteryIcon(const BatteryState& state, const QColor& color, qreal 
     return pixmap;
 }
 
+// Bluetooth icon: vector rune geometry cleanly antialiased
+QPixmap RenderBluetoothIcon(const QColor& color, qreal dpr) {
+    constexpr int Width = 18;
+    constexpr int Height = 18;
+    QPixmap pixmap(qRound(Width * dpr), qRound(Height * dpr));
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const qreal cx = Width / 2.0;
+    const qreal cy = Height / 2.0;
+    const qreal h_half = 6.5;
+    const qreal arm = 4.0;
+
+    QPainterPath bt_path;
+    bt_path.moveTo(cx - arm, cy - arm);
+    bt_path.lineTo(cx + arm, cy + arm);
+    bt_path.lineTo(cx, cy + h_half);
+    bt_path.lineTo(cx, cy - h_half);
+    bt_path.lineTo(cx + arm, cy - arm);
+    bt_path.lineTo(cx - arm, cy + arm);
+
+    painter.setPen(QPen(color, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(bt_path);
+
+    return pixmap;
+}
+
 // Taste rule 4: the docked legend's letter glyphs. Filled circle, letter knocked out in the
 // surface colour — monochrome and inheriting the foreground, per rule 5.
 QPixmap RenderGlyphBadge(const QString& letter, const QColor& fg, const QColor& bg, qreal dpr) {
@@ -1010,14 +1041,26 @@ void HomeScreenWidget::SetupUi() {
     battery_percent_label = new QLabel(this);
     battery_percent_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
+    bluetooth_button = new QToolButton(this);
+    bluetooth_button->setFixedSize(26, 26);
+    bluetooth_button->setCursor(Qt::PointingHandCursor);
+    bluetooth_button->setFocusPolicy(Qt::NoFocus);
+    bluetooth_button->setToolTip(tr("Bluetooth & Controllers"));
+    new ButtonPulse(bluetooth_button, 18, 20, 16);
+    connect(bluetooth_button, &QToolButton::clicked, this, &HomeScreenWidget::ToggleControllers);
+
     top_bar->addWidget(title_label);
     top_bar->addStretch();
+    top_bar->addWidget(bluetooth_button);
+    top_bar->addSpacing(8);
     top_bar->addWidget(battery_label);
     top_bar->addSpacing(4);
     top_bar->addWidget(battery_percent_label);
     top_bar->addSpacing(12);
     top_bar->addWidget(clock_label);
     main_layout->addLayout(top_bar);
+
+    UpdateBluetoothIcon();
 
     // Empty state: one big "+" prompt, pinned left, vertically centered. Shown when no
     // games are found.
@@ -1110,13 +1153,13 @@ void HomeScreenWidget::SetupUi() {
     profile_button =
         MakeIconPillButton(HomeIconPath(QStringLiteral("profile.png")), tr("Profile"), pill_bar);
     UpdateProfileButtonIcon();
-    auto* settings_button =
+    settings_button =
         MakeIconPillButton(HomeIconPath(QStringLiteral("settings.png")), tr("Settings"), pill_bar);
-    auto* add_dir_button = MakeIconPillButton(HomeIconPath(QStringLiteral("adddir.png")),
-                                              tr("Add Game Directory"), pill_bar);
-    auto* wallpaper_button = MakeIconPillButton(HomeIconPath(QStringLiteral("gallery.png")),
-                                                tr("Set Background Image"), pill_bar);
-    auto* power_button =
+    add_dir_button = MakeIconPillButton(HomeIconPath(QStringLiteral("adddir.png")),
+                                        tr("Add Game Directory"), pill_bar);
+    wallpaper_button = MakeIconPillButton(HomeIconPath(QStringLiteral("gallery.png")),
+                                          tr("Set Background Image"), pill_bar);
+    power_button =
         MakeIconPillButton(HomeIconPath(QStringLiteral("power.png")), tr("Quit"), pill_bar);
 
     connect(profile_button, &QToolButton::clicked, this, &HomeScreenWidget::OpenProfile);
@@ -1147,6 +1190,7 @@ void HomeScreenWidget::SetupUi() {
         glyph->setProperty("letter", QString::fromUtf8(entry.first));
         auto* label = new QLabel(tr(entry.second), legend_bar);
         label->setObjectName(QStringLiteral("legendText"));
+        label->setProperty("sourceKey", QString::fromUtf8(entry.second));
         legend_layout->addWidget(glyph);
         legend_layout->addWidget(label);
         legend_layout->addSpacing(10);
@@ -1170,6 +1214,11 @@ void HomeScreenWidget::UpdateLegendBar() {
                                           surface, devicePixelRatioF()));
     }
     for (QLabel* label : legend_bar->findChildren<QLabel*>(QStringLiteral("legendText"))) {
+        const QString source_key = label->property("sourceKey").toString();
+        if (!source_key.isEmpty()) {
+            label->setText(
+                QCoreApplication::translate("HomeScreenWidget", source_key.toUtf8().constData()));
+        }
         QFont font = label->font();
         font.setWeight(QFont::DemiBold);
         label->setFont(font);
@@ -1264,6 +1313,7 @@ void HomeScreenWidget::ApplyAppearanceSettings() {
     ApplyPillBarPlacement(); // dock side is an appearance setting too
     UpdateLegendBar();
     UpdateProfileButtonIcon();
+    UpdateClock();
     update();
 }
 
@@ -1462,6 +1512,44 @@ void HomeScreenWidget::hideEvent(QHideEvent* event) {
     }
 }
 
+void HomeScreenWidget::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange) {
+        RetranslateUI();
+    }
+    QWidget::changeEvent(event);
+}
+
+void HomeScreenWidget::RetranslateUI() {
+    if (title_label) {
+        title_label->setText(tr("Games"));
+    }
+    if (large_add_button) {
+        large_add_button->setText(QStringLiteral("+\n") + tr("Add Game Directory"));
+    }
+    if (profile_button) {
+        profile_button->setToolTip(tr("Profile"));
+    }
+    if (settings_button) {
+        settings_button->setToolTip(tr("Settings"));
+    }
+    if (add_dir_button) {
+        add_dir_button->setToolTip(tr("Add Game Directory"));
+    }
+    if (wallpaper_button) {
+        wallpaper_button->setToolTip(tr("Set Background Image"));
+    }
+    if (power_button) {
+        power_button->setToolTip(tr("Quit"));
+    }
+    if (bluetooth_button) {
+        bluetooth_button->setToolTip(tr("Bluetooth & Controllers"));
+    }
+    UpdateLegendBar();
+    UpdateBattery();
+    Refresh();
+    update();
+}
+
 bool HomeScreenWidget::eventFilter(QObject* watched, QEvent* event) {
     if (watched == tile_list->viewport()) {
         if (event->type() == QEvent::Leave) {
@@ -1537,11 +1625,30 @@ bool HomeScreenWidget::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void HomeScreenWidget::UpdateClock() {
-    clock_label->setText(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm")));
+    const QString format = (UISettings::values.profile_time_format_24h == 0)
+                               ? QStringLiteral("h:mm AP")
+                               : QStringLiteral("hh:mm");
+    clock_label->setText(QDateTime::currentDateTime().toString(format));
     UpdateBattery();
 }
 
+void HomeScreenWidget::UpdateBluetoothIcon() {
+    if (!bluetooth_button) {
+        return;
+    }
+    bluetooth_button->setIcon(QIcon(RenderBluetoothIcon(home_text_color, devicePixelRatioF())));
+    bluetooth_button->setIconSize(QSize(18, 18));
+    const QString hover_bg = (home_text_color == Qt::white)
+                                 ? QStringLiteral("rgba(255, 255, 255, 0.15)")
+                                 : QStringLiteral("rgba(0, 0, 0, 0.10)");
+    bluetooth_button->setStyleSheet(QStringLiteral(
+        "QToolButton { background: transparent; border: none; border-radius: 13px; }"
+        "QToolButton:hover { background-color: %1; }"
+        "QToolButton:pressed { background-color: %1; }").arg(hover_bg));
+}
+
 void HomeScreenWidget::UpdateBattery() {
+    UpdateBluetoothIcon();
     if (!battery_label) {
         return;
     }
