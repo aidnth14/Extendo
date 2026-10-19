@@ -10,6 +10,7 @@
 #include <QString>
 #include <QVBoxLayout>
 #include "citra_qt/applets/swkbd.h"
+#include "citra_qt/console_modal.h"
 
 QtKeyboardValidator::QtKeyboardValidator(QtKeyboard* keyboard_) : keyboard(keyboard_) {}
 
@@ -81,19 +82,27 @@ void QtKeyboardDialog::Submit() {
     }
 }
 
-void QtKeyboardDialog::HandleValidationError(Frontend::ValidationError error) {
+QString ValidationErrorMessage(Frontend::ValidationError error, u16 max_text_length) {
     using namespace Frontend;
-    const std::unordered_map<ValidationError, QString> VALIDATION_ERROR_MESSAGES = {
-        {ValidationError::FixedLengthRequired,
-         tr("Text length is not correct (should be %1 characters)")
-             .arg(keyboard->config.max_text_length)},
-        {ValidationError::MaxLengthExceeded,
-         tr("Text is too long (should be no more than %1 characters)")
-             .arg(keyboard->config.max_text_length)},
-        {ValidationError::BlankInputNotAllowed, tr("Blank input is not allowed")},
-        {ValidationError::EmptyInputNotAllowed, tr("Empty input is not allowed")},
-    };
-    QMessageBox::critical(this, tr("Validation error"), VALIDATION_ERROR_MESSAGES.at(error));
+    switch (error) {
+    case ValidationError::FixedLengthRequired:
+        return QObject::tr("Text length is not correct (should be %1 characters)")
+            .arg(max_text_length);
+    case ValidationError::MaxLengthExceeded:
+        return QObject::tr("Text is too long (should be no more than %1 characters)")
+            .arg(max_text_length);
+    case ValidationError::BlankInputNotAllowed:
+        return QObject::tr("Blank input is not allowed");
+    case ValidationError::EmptyInputNotAllowed:
+        return QObject::tr("Empty input is not allowed");
+    default:
+        return QObject::tr("That entry is not valid");
+    }
+}
+
+void QtKeyboardDialog::HandleValidationError(Frontend::ValidationError error) {
+    QMessageBox::critical(this, tr("Validation error"),
+                          ValidationErrorMessage(error, keyboard->config.max_text_length));
 }
 
 QtKeyboard::QtKeyboard(QWidget& parent_) : parent(parent_) {}
@@ -114,14 +123,55 @@ void QtKeyboard::ShowError(const std::string& error) {
 }
 
 void QtKeyboard::OpenInputDialog() {
-    QtKeyboardDialog dialog(&parent, this);
-    dialog.setWindowFlags(dialog.windowFlags() &
-                          ~(Qt::WindowCloseButtonHint | Qt::WindowContextHelpButtonHint));
-    dialog.setWindowModality(Qt::WindowModal);
-    dialog.exec();
+    // Single/Dual button prompts (the nickname and name entry games actually use) are routed
+    // through the console-styled in-app modal so they match the rest of the UI instead of
+    // appearing as a stock OS dialog over the game.
+    //
+    // Triple-button prompts carry a third "I Forgot" action that the console text modal has no
+    // slot for, so those keep the plain dialog rather than silently losing a button.
+    const bool console_styled = config.button_config == Frontend::ButtonConfig::Single ||
+                                config.button_config == Frontend::ButtonConfig::Dual;
 
-    result_text = dialog.text.toStdString();
-    result_button = dialog.button;
+    if (console_styled) {
+        const QString hint = QString::fromStdString(config.hint_text);
+        const int max_length = static_cast<int>(config.max_text_length);
+
+        // Validation is re-checked after each attempt; a rejected entry re-opens the modal with
+        // what was typed still in place rather than discarding it.
+        QString entry;
+        while (true) {
+            const auto input = ConsoleUI::ShowTextInputModal(
+                &parent, tr("Enter Text"), hint, entry, max_length > 0 ? max_length : 32);
+            if (!input) {
+                result_text.clear();
+                result_button = cancel_id;
+                break;
+            }
+
+            entry = *input;
+            const auto error = ValidateInput(entry.toStdString());
+            if (error != Frontend::ValidationError::None) {
+                ConsoleUI::ShowAlertModal(&parent, tr("Invalid Entry"),
+                                          ValidationErrorMessage(error, config.max_text_length),
+                                          ConsoleUI::AlertType::Warning);
+                continue;
+            }
+
+            result_text = entry.toStdString();
+            result_button = ok_id;
+            break;
+        }
+    } else {
+        QtKeyboardDialog dialog(&parent, this);
+        dialog.setWindowFlags(dialog.windowFlags() &
+                              ~(Qt::WindowCloseButtonHint | Qt::WindowContextHelpButtonHint));
+        dialog.setWindowModality(Qt::WindowModal);
+        dialog.exec();
+
+        result_text = dialog.text.toStdString();
+        result_button = dialog.button;
+    }
+
     LOG_INFO(Frontend, "SWKBD input dialog finished, text={}, button={}", result_text,
              result_button);
 }

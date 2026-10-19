@@ -286,6 +286,12 @@ private slots:
     void ApplyOverlayButtonTheme();
     void OnHomeButtonClicked();
     void SaveAutoResumeState();
+    /// True when the running title has written no in-game save data of its own.
+    ///
+    /// Some games (heavily dialogue-driven ones especially) never persist progress to their
+    /// save archive, so quitting loses everything since boot. For those the auto-resume state
+    /// is the only thing standing in for a save, and it is applied unconditionally.
+    bool TitleLacksInGameSave() const;
     /// Starts/stops the periodic autosave timer to match the current emulation state.
     void UpdateAutoSaveTimer();
     /// Writes a fresh auto-resume state without blocking the UI thread.
@@ -412,6 +418,11 @@ private:
     /// Periodically refreshes the auto-resume state so progress survives a crash or a quit
     /// that skips the save prompt. Only runs while emulation is actually running.
     QTimer autosave_timer;
+    /// Set at boot when the running title keeps no save data of its own. Such a title gets
+    /// autosaving whether or not the user enabled it, and cannot be quit discarding progress.
+    bool forced_autosave_title = false;
+    /// Autosave cadence used for titles that do not save themselves.
+    static constexpr u32 ForcedAutoSaveMinutes = 5;
     bool message_label_used_for_movie = false;
 
     MultiplayerState* multiplayer_state = nullptr;

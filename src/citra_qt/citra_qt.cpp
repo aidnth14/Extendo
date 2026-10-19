@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <functional>
 #include <thread>
 #include <unordered_map>
 #include <QFileDialog>
@@ -2113,6 +2114,15 @@ void GMainWindow::BootGame(const QString& filename) {
         graphicsWidget->Register();
     }
 
+    // Checked once at boot rather than per tick: the archive gains content as soon as the game
+    // saves, and a title that starts saving mid-session should not silently lose the forced
+    // protection it was given.
+    forced_autosave_title = TitleLacksInGameSave();
+    if (forced_autosave_title) {
+        LOG_INFO(Frontend, "Title {:016X} keeps no save data; forcing auto-resume saves",
+                 game_title_id);
+    }
+
     bool should_auto_resume = false;
     u32 resume_slot = Core::AutoResumeSlot;
     auto resume_info = Core::GetSaveStateInfo(game_title_id, 0, Core::AutoResumeSlot);
@@ -3646,8 +3656,51 @@ void GMainWindow::OnLoadState() {
     system.frame_limiter.AdvanceFrame();
 }
 
+bool GMainWindow::TitleLacksInGameSave() const {
+    if (game_title_id == 0) {
+        return false;
+    }
+
+    const std::string save_path = FileSys::ArchiveSource_SDSaveData::GetSaveDataPathFor(
+        FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir), game_title_id);
+    if (!FileUtil::IsDirectory(save_path)) {
+        // The game never even created its save archive.
+        return true;
+    }
+
+    // A formatted-but-unwritten archive is a directory tree with no actual file content, so
+    // counting bytes rather than entries is what distinguishes "has a save" from "has a save
+    // slot". Stops at the first real file.
+    u64 bytes_found = 0;
+    std::function<void(const std::string&, unsigned)> scan = [&](const std::string& directory,
+                                                                 unsigned depth) {
+        if (bytes_found > 0 || depth == 0) {
+            return;
+        }
+        FileUtil::ForeachDirectoryEntry(
+            nullptr, directory,
+            [&](u64*, const std::string& parent, const std::string& name) -> bool {
+                const std::string entry = parent + DIR_SEP + name;
+                if (FileUtil::IsDirectory(entry)) {
+                    scan(entry, depth - 1);
+                } else if (FileUtil::GetSize(entry) > 0) {
+                    bytes_found += FileUtil::GetSize(entry);
+                }
+                return bytes_found == 0;
+            });
+    };
+    scan(save_path, 8);
+
+    return bytes_found == 0;
+}
+
 void GMainWindow::UpdateAutoSaveTimer() {
-    const u32 minutes = UISettings::values.autosave_interval_minutes.GetValue();
+    u32 minutes = UISettings::values.autosave_interval_minutes.GetValue();
+    // A title that keeps no save data of its own has nothing to fall back on, so autosaving is
+    // forced for it even when the user turned autosaving off, and runs more often.
+    if (forced_autosave_title) {
+        minutes = (minutes == 0) ? ForcedAutoSaveMinutes : std::min(minutes, ForcedAutoSaveMinutes);
+    }
     const bool should_run = emulation_running && system.IsPoweredOn() && emu_thread &&
                             emu_thread->IsRunning() && !system.frame_limiter.IsFrameAdvancing() &&
                             minutes > 0;
@@ -3731,10 +3784,19 @@ void GMainWindow::PromptQuitGame() {
         OnPauseGame();
     }
 
-    const auto choice = ConsoleUI::ShowConfirmModal(
-        this, QString(),
-        tr("Do you want to save your progress before quitting?\nSaving creates an auto-resume state so you can continue right where you left off next time."),
-        tr("Save & Quit"), tr("Quit"), tr("Cancel"));
+    // A title that keeps no save data of its own has nothing but this state, so discarding is
+    // not offered: "Quit" there would silently throw away the whole session.
+    const auto choice =
+        forced_autosave_title
+            ? ConsoleUI::ShowConfirmModal(
+                  this, QString(),
+                  tr("This game does not save progress on its own, so your session is saved "
+                     "automatically before quitting."),
+                  tr("Save & Quit"), {}, tr("Cancel"))
+            : ConsoleUI::ShowConfirmModal(
+                  this, QString(),
+                  tr("Do you want to save your progress before quitting?\nSaving creates an auto-resume state so you can continue right where you left off next time."),
+                  tr("Save & Quit"), tr("Quit"), tr("Cancel"));
 
     if (choice == ConsoleUI::ActionChoice::Primary) {
         SaveAutoResumeState();
