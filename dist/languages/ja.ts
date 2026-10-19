@@ -5041,10 +5041,6 @@ Would you like to download it?</source>
         <translation>言語</translation>
     </message>
     <message>
-        <source>Mii Profile</source>
-        <translation>Mii プロフィール</translation>
-    </message>
-    <message>
         <source>Back</source>
         <translation>戻る</translation>
     </message>
@@ -5105,10 +5101,6 @@ Would you like to download it?</source>
         <translation>24時間</translation>
     </message>
     <message>
-        <source>Edit / Create</source>
-        <translation>作成 / 編集</translation>
-    </message>
-    <message>
         <source>January 1</source>
         <translation>1月1日</translation>
     </message>
@@ -5123,18 +5115,6 @@ Would you like to download it?</source>
     <message>
         <source>Profile Icon</source>
         <translation>プロフィールアイコン</translation>
-    </message>
-    <message>
-        <source>Create a custom cel-shaded Mii character or choose an image:</source>
-        <translation>カスタムMiiキャラクターを作成するか、画像を選択してください:</translation>
-    </message>
-    <message>
-        <source>🎨 Mii Maker (Character Creator)</source>
-        <translation>🎨 Mii 作成 (キャラクターエディター)</translation>
-    </message>
-    <message>
-        <source>📁 Choose Image from Computer</source>
-        <translation>📁 コンピュータから画像を選択</translation>
     </message>
     <message>
         <source>Select Profile Icon</source>

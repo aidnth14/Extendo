@@ -17,12 +17,6 @@ add_library(citra_qt STATIC EXCLUDE_FROM_ALL
     applets/swkbd.h
     console_modal.cpp
     console_modal.h
-    mii_maker/mii_render.cpp
-    mii_maker/mii_render.h
-    mii_maker/mii_manager.cpp
-    mii_maker/mii_manager.h
-    mii_maker/mii_maker_dialog.cpp
-    mii_maker/mii_maker_dialog.h
     bootmanager.cpp
     bootmanager.h
     compatibility_list.cpp
@@ -142,6 +136,8 @@ add_library(citra_qt STATIC EXCLUDE_FROM_ALL
     game_list_worker.h
     home_screen.cpp
     home_screen.h
+    uisounds.cpp
+    uisounds.h
     hotkeys.cpp
     hotkeys.h
     hotkey_monitor.cpp

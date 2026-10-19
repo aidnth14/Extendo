@@ -901,6 +901,9 @@ void QtConfig::ReadUIValues() {
         ReadBasicSetting(UISettings::values.show_advanced_frametime_info);
         ReadBasicSetting(UISettings::values.confirm_before_closing);
         ReadBasicSetting(UISettings::values.save_state_warning);
+        ReadBasicSetting(UISettings::values.autosave_interval_minutes);
+        ReadBasicSetting(UISettings::values.ui_sounds_enabled);
+        ReadBasicSetting(UISettings::values.ui_sounds_volume);
         ReadBasicSetting(UISettings::values.first_start);
         ReadBasicSetting(UISettings::values.callout_flags);
         ReadBasicSetting(UISettings::values.show_console);
@@ -1457,6 +1460,9 @@ void QtConfig::SaveUIValues() {
         WriteBasicSetting(UISettings::values.show_advanced_frametime_info);
         WriteBasicSetting(UISettings::values.confirm_before_closing);
         WriteBasicSetting(UISettings::values.save_state_warning);
+        WriteBasicSetting(UISettings::values.autosave_interval_minutes);
+        WriteBasicSetting(UISettings::values.ui_sounds_enabled);
+        WriteBasicSetting(UISettings::values.ui_sounds_volume);
         WriteBasicSetting(UISettings::values.first_start);
         WriteBasicSetting(UISettings::values.callout_flags);
         WriteBasicSetting(UISettings::values.show_console);

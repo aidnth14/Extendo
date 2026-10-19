@@ -286,6 +286,10 @@ private slots:
     void ApplyOverlayButtonTheme();
     void OnHomeButtonClicked();
     void SaveAutoResumeState();
+    /// Starts/stops the periodic autosave timer to match the current emulation state.
+    void UpdateAutoSaveTimer();
+    /// Writes a fresh auto-resume state without blocking the UI thread.
+    void OnAutoSaveTick();
     void PromptQuitGame();
     void RepositionScreenDivider();
     void UpdateScreenSplitFromRatio(double ratio);
@@ -405,6 +409,9 @@ private:
     QWidget* volume_popup = nullptr;
     QSlider* volume_slider = nullptr;
     QTimer status_bar_update_timer;
+    /// Periodically refreshes the auto-resume state so progress survives a crash or a quit
+    /// that skips the save prompt. Only runs while emulation is actually running.
+    QTimer autosave_timer;
     bool message_label_used_for_movie = false;
 
     MultiplayerState* multiplayer_state = nullptr;

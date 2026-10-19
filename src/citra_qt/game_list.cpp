@@ -4,6 +4,7 @@
 
 #include <QActionGroup>
 #include <QApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
@@ -20,10 +21,12 @@
 #include <QMessageBox>
 #include <QModelIndex>
 #include <QPainter>
+#include <QSet>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QStyledItemDelegate>
 #include <QThreadPool>
+#include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
 #include <fmt/format.h>
@@ -345,6 +348,14 @@ GameList::GameList(PlayTime::PlayTimeManager& play_time_manager_, GMainWindow* p
     watcher = new QFileSystemWatcher(this);
     connect(watcher, &QFileSystemWatcher::directoryChanged, this, &GameList::RefreshGameDirectory,
             Qt::UniqueConnection);
+
+    // Backs up the watcher: polls the game folders a few times a minute so ROMs added or
+    // removed outside the app show up without a restart, even where change notifications
+    // are unreliable (network shares, external drives).
+    poll_timer = new QTimer(this);
+    poll_timer->setInterval(PollIntervalMs);
+    connect(poll_timer, &QTimer::timeout, this, &GameList::PollGameDirectories);
+    poll_timer->start();
 
     this->main_window = parent;
     layout = new QVBoxLayout;
@@ -1144,6 +1155,83 @@ void GameList::RefreshGameDirectory() {
     if (!UISettings::values.game_dirs.isEmpty() && current_worker != nullptr) {
         LOG_INFO(Frontend, "Change detected in the applications directory. Reloading game list.");
         PopulateAsync(UISettings::values.game_dirs);
+    }
+}
+
+void GameList::PollGameDirectories() {
+    // Scanning while a game runs would fight with emulation for I/O, and the list is
+    // repopulated on shutdown anyway.
+    if (Core::System::GetInstance().IsPoweredOn()) {
+        return;
+    }
+
+    bool changed = false;
+    QSet<QString> seen_dirs;
+
+    for (const UISettings::GameDir& game_dir : UISettings::values.game_dirs) {
+        // The INSTALLED/SYSTEM pseudo-entries point at our own NAND/SDMC folders, which only
+        // change through the emulator itself.
+        if (game_dir.path == QStringLiteral("INSTALLED") ||
+            game_dir.path == QStringLiteral("SYSTEM")) {
+            continue;
+        }
+        seen_dirs.insert(game_dir.path);
+
+        // Fingerprint name + size + mtime of the directory's entries. Comparing these catches
+        // additions, deletions, renames and in-place rewrites, which a bare mtime on the
+        // directory itself would miss.
+        QString fingerprint;
+        const QDir dir(game_dir.path);
+        if (!dir.exists()) {
+            // A missing folder is itself a change worth reporting (unplugged drive, moved dir).
+            fingerprint = QStringLiteral("<missing>");
+        } else {
+            const auto entries =
+                dir.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+            for (const QFileInfo& entry : entries) {
+                const QString mtime =
+                    QString::number(entry.lastModified().toMSecsSinceEpoch());
+                if (entry.isDir()) {
+                    // Deep scans recurse, so a subfolder's own mtime stands in for its contents.
+                    fingerprint += entry.fileName() + QLatin1Char('/') + mtime +
+                                   QLatin1Char('\n');
+                    continue;
+                }
+                if (!supported_file_extensions.contains(entry.suffix(), Qt::CaseInsensitive)) {
+                    continue;
+                }
+                fingerprint += entry.fileName() + QLatin1Char('\t') +
+                               QString::number(entry.size()) + QLatin1Char('\t') + mtime +
+                               QLatin1Char('\n');
+            }
+        }
+
+        const auto previous = dir_fingerprints.constFind(game_dir.path);
+        if (previous == dir_fingerprints.constEnd()) {
+            // First sighting: record the baseline without forcing a redundant rescan, since
+            // the list was just populated.
+            dir_fingerprints.insert(game_dir.path, fingerprint);
+            continue;
+        }
+        if (previous.value() != fingerprint) {
+            dir_fingerprints.insert(game_dir.path, fingerprint);
+            changed = true;
+        }
+    }
+
+    // Forget directories the user removed from the library.
+    for (auto it = dir_fingerprints.begin(); it != dir_fingerprints.end();) {
+        if (seen_dirs.contains(it.key())) {
+            ++it;
+        } else {
+            it = dir_fingerprints.erase(it);
+        }
+    }
+
+    if (changed) {
+        // Shares RefreshGameDirectory's 1-second throttle, so a burst of changes (a large
+        // copy landing file by file) collapses into a single rescan.
+        RefreshGameDirectory();
     }
 }
 

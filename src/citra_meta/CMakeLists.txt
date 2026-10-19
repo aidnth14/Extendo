@@ -68,11 +68,13 @@ if (ENABLE_QT)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${PROJECT_SOURCE_DIR}/dist/fonts/extendo_ui.ttf"
                 "${HOME_ASSET_DEST}/extendo_ui.ttf"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${HOME_ASSET_DEST}/avatar_assets"
+        # Interface sound effects, copied as loose .wav files for the same reason as the icons:
+        # the set can be swapped without a rebuild. Absent files are tolerated at runtime.
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${HOME_ASSET_DEST}/ui_sounds"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${PROJECT_SOURCE_DIR}/dist/avatar_assets"
-                "${HOME_ASSET_DEST}/avatar_assets"
-        COMMENT "Copying home screen icons, UI font, and avatar assets into the app"
+                "${PROJECT_SOURCE_DIR}/dist/ui_sounds"
+                "${HOME_ASSET_DEST}/ui_sounds"
+        COMMENT "Copying home screen icons, UI font and interface sounds into the app"
         VERBATIM
     )
 

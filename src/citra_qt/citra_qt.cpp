@@ -13,6 +13,7 @@
 #include <thread>
 #include <unordered_map>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFutureWatcher>
 #include <QGraphicsDropShadowEffect>
@@ -51,7 +52,6 @@
 #include "citra_qt/applets/mii_selector.h"
 #include "citra_qt/applets/swkbd.h"
 #include "citra_qt/bootmanager.h"
-#include "citra_qt/mii_maker/mii_maker_dialog.h"
 #include "citra_qt/console_modal.h"
 #include "citra_qt/camera/qt_multimedia_camera.h"
 #include "citra_qt/camera/still_image_camera.h"
@@ -89,6 +89,7 @@
 #include "citra_qt/multiplayer/state.h"
 #include "citra_qt/qt_image_interface.h"
 #include "citra_qt/qt_swizzle.h"
+#include "citra_qt/uisounds.h"
 #include "citra_qt/uisettings.h"
 #include "common/play_time_manager.h"
 #ifdef ENABLE_QT_UPDATE_CHECKER
@@ -882,6 +883,11 @@ GMainWindow::GMainWindow(Core::System& system_)
         QMetaObject::invokeMethod(this, "OnMoviePlaybackCompleted", Qt::BlockingQueuedConnection);
     });
 
+    // Installed before the widgets are built so every button created from here on, including
+    // those inside dialogs generated from .ui files, gets hover and click feedback.
+    UiSounds::InstallGlobalFilter();
+    UiSounds::Preload();
+
     InitializeWidgets();
     InitializeDebugWidgets();
     InitializeRecentFileMenuActions();
@@ -1358,6 +1364,9 @@ void GMainWindow::InitializeSaveStateMenuActions() {
             &GMainWindow::UpdateSaveStates);
     connect(ui->menu_Save_State->menuAction(), &QAction::hovered, this,
             &GMainWindow::UpdateSaveStates);
+
+    autosave_timer.setSingleShot(false);
+    connect(&autosave_timer, &QTimer::timeout, this, &GMainWindow::OnAutoSaveTick);
 
     UpdateSaveStates();
 }
@@ -2200,6 +2209,8 @@ void GMainWindow::ShutdownGame() {
         return;
     }
 
+    autosave_timer.stop();
+
     if (ui->action_Fullscreen->isChecked()) {
         HideFullscreen();
     }
@@ -2842,14 +2853,34 @@ void GMainWindow::OnGameListAddDirectory() {
     const QString dir_path = QFileDialog::getExistingDirectory(this, tr("Select Directory"));
     if (dir_path.isEmpty())
         return;
-    UISettings::GameDir game_dir{dir_path, false, true};
-    if (!UISettings::values.game_dirs.contains(game_dir)) {
-        UISettings::values.game_dirs.append(game_dir);
-        game_list->PopulateAsync(UISettings::values.game_dirs);
-        config->Save();
-    } else {
+
+    // Compare resolved paths so a symlink to an already-added folder, or a path spelled
+    // differently, is recognised as the same directory instead of listing every title twice.
+    const QString resolved = QFileInfo(dir_path).canonicalFilePath();
+    const QString new_path = resolved.isEmpty() ? dir_path : resolved;
+
+    const auto& dirs = UISettings::values.game_dirs;
+    const bool already_listed =
+        std::any_of(dirs.begin(), dirs.end(), [&new_path](const UISettings::GameDir& existing) {
+            if (existing.path == QStringLiteral("INSTALLED") ||
+                existing.path == QStringLiteral("SYSTEM")) {
+                return false;
+            }
+            const QString existing_resolved = QFileInfo(existing.path).canonicalFilePath();
+            return (existing_resolved.isEmpty() ? existing.path : existing_resolved) == new_path;
+        });
+
+    if (already_listed) {
         LOG_WARNING(Frontend, "Selected directory is already in the application list");
+        QMessageBox::information(this, tr("Folder Already Added"),
+                                 tr("This folder is already in your library, so it was not added "
+                                    "again."));
+        return;
     }
+
+    UISettings::values.game_dirs.append(UISettings::GameDir{new_path, false, true});
+    game_list->PopulateAsync(UISettings::values.game_dirs);
+    config->Save();
 }
 
 void GMainWindow::OnGameListShowList(bool show) {
@@ -3233,6 +3264,7 @@ void GMainWindow::OnResumeGame(bool first_start) {
 #endif
 
     UpdateSaveStates();
+    UpdateAutoSaveTimer();
     UpdateStatusButtons();
     if (home_button && emulation_running) {
         RepositionHomeButton();
@@ -3259,6 +3291,7 @@ void GMainWindow::OnPauseGame() {
     system.frame_limiter.SetFrameAdvancing(true);
     qt_cameras->PauseCameras();
 
+    autosave_timer.stop();
     play_time_manager->Stop();
 
     UpdateMenuState();
@@ -3613,6 +3646,38 @@ void GMainWindow::OnLoadState() {
     system.frame_limiter.AdvanceFrame();
 }
 
+void GMainWindow::UpdateAutoSaveTimer() {
+    const u32 minutes = UISettings::values.autosave_interval_minutes.GetValue();
+    const bool should_run = emulation_running && system.IsPoweredOn() && emu_thread &&
+                            emu_thread->IsRunning() && !system.frame_limiter.IsFrameAdvancing() &&
+                            minutes > 0;
+
+    if (!should_run) {
+        autosave_timer.stop();
+        return;
+    }
+
+    // Restart rather than leave the old interval running, in case the setting changed.
+    autosave_timer.start(static_cast<int>(minutes) * 60 * 1000);
+}
+
+void GMainWindow::OnAutoSaveTick() {
+    if (!emulation_running || !system.IsPoweredOn()) {
+        autosave_timer.stop();
+        return;
+    }
+    // Don't stack a second save on top of one still being written.
+    if (system.IsSaveStatePending() || system.IsSignalPending(Core::System::Signal::Save)) {
+        return;
+    }
+
+    // Writing to AutoResumeSlot always targets the same file, so the previous autosave is
+    // replaced in place -- one state per title, no stale timestamps piling up.
+    LOG_INFO(Frontend, "Autosaving auto-resume state for title {:016X}", game_title_id);
+    system.SendSignal(Core::System::Signal::Save, Core::AutoResumeSlot);
+    system.frame_limiter.AdvanceFrame();
+}
+
 void GMainWindow::SaveAutoResumeState() {
     if (!emulation_running || !system.IsPoweredOn()) {
         return;
@@ -3708,6 +3773,7 @@ void GMainWindow::OnEscapePressed() {
 }
 
 void GMainWindow::OnHomeButtonClicked() {
+    UiSounds::Play(UiSounds::Name::Back);
     PromptQuitGame();
 }
 
@@ -4232,17 +4298,6 @@ static QString GetProfileLanguageText(Core::System& system) {
     return s_profile_lang_names.at(1);
 }
 
-static QString GetProfileMiiText() {
-    auto miis = MiiMaker::MiiManager::LoadMiisFromNAND();
-    if (!miis.empty()) {
-        QString name = MiiMaker::MiiManager::GetMiiName(miis[0]);
-        if (!name.isEmpty()) {
-            return name;
-        }
-    }
-    return QCoreApplication::translate("GMainWindow", "Edit / Create");
-}
-
 static QString GetProfileDobText(Core::System& system) {
     int m = UISettings::values.profile_birthmonth;
     int d = UISettings::values.profile_birthday;
@@ -4468,9 +4523,6 @@ void GMainWindow::ShowProfileOverlay() {
     // 7. Language
     auto row_language = make_row(tr("Language"), GetProfileLanguageText(system));
 
-    // 8. Mii Profile
-    auto row_mii_profile = make_row(tr("Avatar Profile"), GetProfileMiiText());
-
     right_layout->addStretch();
     content_layout->addWidget(right_col, 1);
     dialog_layout->addWidget(content_widget, 1);
@@ -4507,7 +4559,7 @@ void GMainWindow::ShowProfileOverlay() {
 
     auto retranslate_profile_dialog = [this, title_label, sec_title, row_nickname, row_fullname,
                                        row_region, row_dob, row_gender, row_time_format,
-                                       row_language, row_mii_profile, button_box] {
+                                       row_language, button_box] {
         title_label->setText(tr("User Settings"));
         sec_title->setText(tr("Profile Settings"));
 
@@ -4518,7 +4570,6 @@ void GMainWindow::ShowProfileOverlay() {
         row_gender.title_lbl->setText(tr("Gender"));
         row_time_format.title_lbl->setText(tr("Time Format"));
         row_language.title_lbl->setText(tr("Language"));
-        row_mii_profile.title_lbl->setText(tr("Avatar Profile"));
 
         row_fullname.val_lbl->setText(GetProfileFullNameText());
         row_region.val_lbl->setText(GetProfileRegionText());
@@ -4526,7 +4577,6 @@ void GMainWindow::ShowProfileOverlay() {
         row_gender.val_lbl->setText(GetProfileGenderText());
         row_time_format.val_lbl->setText(GetProfileTimeFormatText());
         row_language.val_lbl->setText(GetProfileLanguageText(system));
-        row_mii_profile.val_lbl->setText(GetProfileMiiText());
 
         if (auto* cancel_button = button_box->button(QDialogButtonBox::Cancel)) {
             cancel_button->setText(tr("Back"));
@@ -4551,51 +4601,18 @@ void GMainWindow::ShowProfileOverlay() {
     };
     dialog->installEventFilter(new ProfileDialogFilter(retranslate_profile_dialog, dialog));
 
-    auto open_mii_maker = [this, avatar_label, nickname_display, row_nickname, row_mii_profile] {
-        auto miis = MiiMaker::MiiManager::LoadMiisFromNAND();
-        const Mii::MiiData* initial = (!miis.empty() && miis[0].mii_id != 0) ? &miis[0] : nullptr;
-
-        MiiMaker::MiiMakerDialog mii_dlg(this, initial);
-        connect(&mii_dlg, &MiiMaker::MiiMakerDialog::MiiSaved, this,
-                [this, avatar_label, nickname_display, row_nickname, row_mii_profile] {
+    // Connections for functionality with Nintendo Console UI Modals
+    connect(avatar_btn, &QPushButton::clicked, this,
+            [this, avatar_label] {
+                const QString filename = QFileDialog::getOpenFileName(
+                    this, tr("Select Profile Icon"), QDir::homePath(),
+                    tr("Images (*.png *.jpg *.jpeg *.webp *.bmp)"));
+                if (!filename.isEmpty()) {
+                    UISettings::values.profile_avatar_path = filename;
                     config->Save();
                     avatar_label->setPixmap(GetProfileAvatarPixmap(QSize(160, 160), 8));
-                    nickname_display->setText(GetProfileNickname(system));
-                    row_nickname.val_lbl->setText(GetProfileNickname(system));
-                    row_mii_profile.val_lbl->setText(GetProfileMiiText());
                     if (home_screen) {
                         home_screen->ApplyAppearanceSettings();
-                    }
-                });
-        mii_dlg.Exec();
-    };
-
-    // Connections for functionality with Nintendo Console UI Modals
-    connect(row_mii_profile.btn, &QPushButton::clicked, this, open_mii_maker);
-
-    connect(avatar_btn, &QPushButton::clicked, this,
-            [this, avatar_label, open_mii_maker] {
-                const QStringList avatar_options = {
-                    tr("🎨 Avatar Maker (Character Creator)"),
-                    tr("📁 Choose Image from Computer"),
-                };
-                int choice = ConsoleUI::ShowChoiceModal(
-                    this, tr("Profile Icon"),
-                    tr("Create a custom cel-shaded avatar or choose an image:"),
-                    avatar_options, 0);
-                if (choice == 0) {
-                    open_mii_maker();
-                } else if (choice == 1) {
-                    const QString filename = QFileDialog::getOpenFileName(
-                        this, tr("Select Profile Icon"), QDir::homePath(),
-                        tr("Images (*.png *.jpg *.jpeg *.webp *.bmp)"));
-                    if (!filename.isEmpty()) {
-                        UISettings::values.profile_avatar_path = filename;
-                        config->Save();
-                        avatar_label->setPixmap(GetProfileAvatarPixmap(QSize(160, 160), 8));
-                        if (home_screen) {
-                            home_screen->ApplyAppearanceSettings();
-                        }
                     }
                 }
             });

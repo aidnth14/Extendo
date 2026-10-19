@@ -18,17 +18,12 @@ class QtMiiSelectorDialog final : public QDialog {
 public:
     QtMiiSelectorDialog(QWidget* parent, QtMiiSelector* mii_selector_);
 
-    int GetSelectedIndex() const {
-        return selected_index;
-    }
-
 private:
-    QDialogButtonBox* buttons{nullptr};
-    QComboBox* combobox{nullptr};
-    QVBoxLayout* layout{nullptr};
-    QtMiiSelector* mii_selector{nullptr};
+    QDialogButtonBox* buttons;
+    QComboBox* combobox;
+    QVBoxLayout* layout;
+    QtMiiSelector* mii_selector;
     u32 return_code = 0;
-    int selected_index = 0;
     std::vector<Mii::MiiData> miis;
 
     friend class QtMiiSelector;

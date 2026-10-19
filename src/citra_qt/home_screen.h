@@ -7,6 +7,9 @@
 #include <QColor>
 #include <QMap>
 #include <QPixmap>
+#include <QPoint>
+#include <QSet>
+#include <QStringList>
 #include <QWidget>
 
 class QLabel;
@@ -81,6 +84,21 @@ private:
     void RebuildScaledBackground();
     void LoadCustomCovers();
     void SaveCustomCovers();
+    /// Deletes the cover image copied into app data for this game. Only touches files inside
+    /// our own covers folder, never an image the user still references from elsewhere.
+    void DeleteStoredCover(const QString& game_path);
+    /// Hides a game from the shelf without touching the ROM on disk, and drops its cover art.
+    void RemoveGameFromLibrary(const QString& game_path);
+    void LoadTileOrder();
+    void SaveTileOrder();
+    void LoadRemovedGames();
+    void SaveRemovedGames();
+    /// Picks up the tile under the cursor for drag-reordering after a press-and-hold.
+    void BeginTileReorder();
+    /// Moves the held tile to the row under the cursor, if that is a different game tile.
+    void UpdateTileReorder(const QPoint& viewport_pos);
+    /// Drops the held tile and persists the new order.
+    void FinishTileReorder();
     /// Recomputes home_text_color from the current background's brightness and reapplies it.
     void UpdateTextColorForBackground();
     void ApplyCombinedStylesheet();
@@ -88,6 +106,8 @@ private:
     void UpdateProfileButtonIcon();
 
     static constexpr int TileIconSize = 150;
+    /// How long to hold a tile before it is picked up for reordering.
+    static constexpr int TileReorderHoldMs = 400;
 
     QStandardItemModel* source_model;
     int tile_icon_size = TileIconSize;
@@ -97,6 +117,15 @@ private:
     bool shelf_dragging = false;
     QPoint drag_start_pos;
     int drag_start_scroll = 0;
+    /// User's manual tile order as game full paths. Games not listed here (newly scanned ones)
+    /// keep their scan order and sort after the arranged ones.
+    QStringList tile_order;
+    /// Games hidden from the shelf by "Remove Game". The ROM files stay where they are.
+    QSet<QString> removed_games;
+    /// Row currently picked up for reordering, or -1. Press-and-hold enters this mode; a plain
+    /// press-drag pans the shelf instead, so the two gestures don't fight.
+    int reorder_row = -1;
+    QTimer* long_press_timer = nullptr;
     QLabel* clock_label = nullptr;
     QLabel* title_label = nullptr;
     QWidget* pill_bar = nullptr;

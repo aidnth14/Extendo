@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <QMap>
 #include <QMenu>
 #include <QPushButton>
 #include <QString>
@@ -26,6 +27,7 @@ class QFileSystemWatcher;
 class QHBoxLayout;
 class QLabel;
 class QLineEdit;
+class QTimer;
 template <typename>
 class QList;
 class QModelIndex;
@@ -88,6 +90,16 @@ public:
 
     void RefreshGameDirectory();
 
+    /// Polls the configured game directories for added/removed/renamed/resized ROMs and
+    /// triggers a rescan when anything changed. QFileSystemWatcher alone misses changes on
+    /// network shares and external drives, and silently stops watching a folder that is
+    /// temporarily unmounted or replaced, so this is the fallback that keeps the list live.
+    void PollGameDirectories();
+
+    /// How often the game folders are re-checked. Three seconds reads as immediate without
+    /// stat-ing the library hard enough to matter.
+    static constexpr int PollIntervalMs = 3'000;
+
     void ToggleFavorite(u64 program_id);
     void AddFavorite(u64 program_id);
     void RemoveFavorite(u64 program_id);
@@ -144,6 +156,11 @@ private:
     QStandardItemModel* item_model = nullptr;
     GameListWorker* current_worker = nullptr;
     QFileSystemWatcher* watcher = nullptr;
+    /// Drives PollGameDirectories(); complements `watcher` rather than replacing it.
+    QTimer* poll_timer = nullptr;
+    /// Last seen fingerprint of each game directory's contents, used to detect changes the
+    /// filesystem watcher did not report.
+    QMap<QString, QString> dir_fingerprints;
     CompatibilityList compatibility_list;
 
     friend class GameListSearchField;

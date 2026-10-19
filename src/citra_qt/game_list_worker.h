@@ -11,6 +11,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <QList>
 #include <QObject>
 #include <QRunnable>
@@ -69,5 +70,11 @@ private:
     const PlayTime::PlayTimeManager& play_time_manager;
 
     QStringList watch_list;
+
+    /// Canonical paths of titles already emitted this scan. Two game dirs can resolve to the same
+    /// files (a symlink to an already-added folder, or a deep scan of a parent directory), which
+    /// would otherwise show every title twice.
+    std::unordered_set<std::string> emitted_titles;
+
     std::atomic_bool stop_processing;
 };

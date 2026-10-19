@@ -2,11 +2,13 @@
 // Licensed under GPLv2 or any later version
 // Refer to the misc/licenses/gplv2.txt file included.
 
+#include <algorithm>
 #include <functional>
 #include <utility>
 #include <vector>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QDateTime>
 #include <QDir>
 #include <QEvent>
@@ -22,6 +24,7 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QMovie>
 #include <QPainter>
@@ -41,6 +44,7 @@
 #include <QWheelEvent>
 #include "citra_qt/game_list_p.h"
 #include "citra_qt/home_screen.h"
+#include "citra_qt/uisounds.h"
 #include "citra_qt/uisettings.h"
 #include "common/file_util.h"
 
@@ -594,6 +598,47 @@ QString CustomCoversPath() {
     return UserDataDir() + QStringLiteral("custom_covers.txt");
 }
 
+/// Folder holding cover images copied in from wherever the user picked them.
+QString CoversDir() {
+    return UserDataDir() + QStringLiteral("covers/");
+}
+
+/// Folder holding wallpapers copied in from wherever the user picked them.
+QString BackgroundsDir() {
+    return UserDataDir() + QStringLiteral("backgrounds/");
+}
+
+QString TileOrderPath() {
+    return UserDataDir() + QStringLiteral("tile_order.txt");
+}
+
+QString RemovedGamesPath() {
+    return UserDataDir() + QStringLiteral("removed_games.txt");
+}
+
+/// Copies a user-picked image into one of our own data folders so the art keeps working after
+/// the original is moved or deleted. Returns the stored path, or the source path if the copy
+/// failed (better a working reference than no art at all).
+QString StoreImageInAppData(const QString& source_path, const QString& target_dir,
+                            const QString& base_name) {
+    QDir().mkpath(target_dir);
+    const QString ext = QFileInfo(source_path).suffix();
+    const QString stored_path =
+        target_dir + base_name + (ext.isEmpty() ? QString() : QStringLiteral(".") + ext);
+    QFile::remove(stored_path);
+    if (!QFile::copy(source_path, stored_path)) {
+        LOG_ERROR(Frontend, "Failed to copy image {} into app data",
+                  source_path.toStdString());
+        return source_path;
+    }
+    return stored_path;
+}
+
+/// Stable per-game file name for stored art.
+QString ArtKeyFor(const QString& game_path) {
+    return QString::number(qHash(game_path), 16);
+}
+
 // Icons are loose files inside the app bundle's Resources/home_icons/ folder rather than
 // compiled into the binary via a Qt resource (.qrc), so they can be swapped without a rebuild.
 QString HomeIconPath(const QString& file_name) {
@@ -674,8 +719,11 @@ public:
     }
 
     explicit TileHoverDelegate(QListWidget* view) : QStyledItemDelegate(view), tile_list(view) {
-        animation.setDuration(140);
-        animation.setEasingCurve(QEasingCurve::OutCubic);
+        // Short with a slight overshoot: the tile punches past its resting size and settles,
+        // which is what reads as "snappy" rather than "sliding". OutBack drives `progress`
+        // above 1.0 mid-flight, so anything using it as an alpha has to clamp.
+        animation.setDuration(120);
+        animation.setEasingCurve(QEasingCurve::OutBack);
         QObject::connect(&animation, &QVariantAnimation::valueChanged, view,
                          [this](const QVariant& value) {
                              progress = value.toReal();
@@ -683,6 +731,10 @@ public:
                                  tile_list->viewport()->update();
                              }
                          });
+    }
+
+    QModelIndex HoveredIndex() const {
+        return hovered_index;
     }
 
     void SetHoveredIndex(const QModelIndex& index) {
@@ -729,6 +781,9 @@ public:
         // whatever was last clicked even after the pointer moves elsewhere, which would show
         // two highlighted tiles at once (the old selection and the new hover) if used here.
         const qreal emphasis = (index == hovered_index) ? progress : 0.0;
+        // The easing overshoots past 1.0, which is wanted for the scale but would push colour
+        // alphas out of range.
+        const qreal alpha_emphasis = qBound(0.0, emphasis, 1.0);
 
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
@@ -750,7 +805,7 @@ public:
         // it, so the focused tile gains a clean, bright (or dark) surround.
         if (emphasis > 0.0) {
             QColor plate = text_color;
-            plate.setAlphaF(0.92 * emphasis);
+            plate.setAlphaF(0.92 * alpha_emphasis);
             painter->setPen(Qt::NoPen);
             painter->setBrush(plate);
             const qreal grow = (icon_rect.width() * HoverScale) / 2.0 + 4.0 * emphasis;
@@ -883,11 +938,158 @@ void HomeScreenWidget::SaveCustomCovers() {
     }
 }
 
+void HomeScreenWidget::BeginTileReorder() {
+    const QPoint pos = tile_list->viewport()->mapFromGlobal(QCursor::pos());
+    QListWidgetItem* item = tile_list->itemAt(pos);
+    if (!item || item->data(AddDirectoryRole).toBool()) {
+        return;
+    }
+    reorder_row = tile_list->row(item);
+    tile_list->setCurrentItem(item);
+    tile_list->viewport()->setCursor(Qt::ClosedHandCursor);
+    UiSounds::Play(UiSounds::Name::PickUp);
+}
+
+void HomeScreenWidget::UpdateTileReorder(const QPoint& viewport_pos) {
+    if (reorder_row < 0) {
+        return;
+    }
+    QListWidgetItem* target = tile_list->itemAt(viewport_pos);
+    if (!target) {
+        return;
+    }
+    const int target_row = tile_list->row(target);
+    // Never move a tile past the trailing "+" tile, which has to stay last.
+    if (target_row == reorder_row || target->data(AddDirectoryRole).toBool()) {
+        return;
+    }
+    QListWidgetItem* held = tile_list->takeItem(reorder_row);
+    tile_list->insertItem(target_row, held);
+    tile_list->setCurrentItem(held);
+    reorder_row = target_row;
+    // Ticks once per position swap, so dragging across the shelf reads as discrete steps.
+    UiSounds::Play(UiSounds::Name::MoveApart);
+}
+
+void HomeScreenWidget::FinishTileReorder() {
+    if (reorder_row < 0) {
+        return;
+    }
+    reorder_row = -1;
+    tile_list->viewport()->unsetCursor();
+    UiSounds::Play(UiSounds::Name::PutDown);
+
+    // Persist the shelf's current visual order, skipping the trailing "+" tile.
+    tile_order.clear();
+    for (int row = 0; row < tile_list->count(); ++row) {
+        QListWidgetItem* item = tile_list->item(row);
+        if (item->data(AddDirectoryRole).toBool()) {
+            continue;
+        }
+        const QString full_path = item->data(FullPathRole).toString();
+        if (!full_path.isEmpty()) {
+            tile_order.append(full_path);
+        }
+    }
+    SaveTileOrder();
+}
+
+void HomeScreenWidget::DeleteStoredCover(const QString& game_path) {
+    const auto it = custom_covers.constFind(game_path);
+    if (it == custom_covers.constEnd()) {
+        return;
+    }
+    const QString cover_path = it.value();
+    // Only delete images we copied into our own folder. Older entries may still point at a
+    // file somewhere in the user's own pictures, and deleting that would destroy their data.
+    if (cover_path.startsWith(CoversDir())) {
+        QFile::remove(cover_path);
+    }
+    // Stop and drop any animated cover still playing for this game.
+    if (auto* movie = cover_movies.take(game_path)) {
+        movie->stop();
+        delete movie;
+    }
+    custom_covers.remove(game_path);
+}
+
+void HomeScreenWidget::RemoveGameFromLibrary(const QString& game_path) {
+    // Hides the tile only; the ROM itself is left untouched on disk.
+    removed_games.insert(game_path);
+    DeleteStoredCover(game_path);
+    tile_order.removeAll(game_path);
+    SaveRemovedGames();
+    SaveCustomCovers();
+    SaveTileOrder();
+    Refresh();
+}
+
+void HomeScreenWidget::LoadTileOrder() {
+    tile_order.clear();
+    QFile file(TileOrderPath());
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return;
+    }
+    QTextStream stream(&file);
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine();
+        if (!line.isEmpty()) {
+            tile_order.append(line);
+        }
+    }
+}
+
+void HomeScreenWidget::SaveTileOrder() {
+    const QString path = TileOrderPath();
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return;
+    }
+    QTextStream stream(&file);
+    for (const QString& game_path : tile_order) {
+        stream << game_path << '\n';
+    }
+}
+
+void HomeScreenWidget::LoadRemovedGames() {
+    removed_games.clear();
+    QFile file(RemovedGamesPath());
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return;
+    }
+    QTextStream stream(&file);
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine();
+        if (!line.isEmpty()) {
+            removed_games.insert(line);
+        }
+    }
+}
+
+void HomeScreenWidget::SaveRemovedGames() {
+    const QString path = RemovedGamesPath();
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return;
+    }
+    QTextStream stream(&file);
+    for (const QString& game_path : removed_games) {
+        stream << game_path << '\n';
+    }
+}
+
 HomeScreenWidget::HomeScreenWidget(QStandardItemModel* source_model_, QWidget* parent)
     : QWidget(parent), source_model(source_model_) {
     SetupUi();
     ApplyAppearanceSettings();
     LoadCustomCovers();
+    LoadTileOrder();
+    LoadRemovedGames();
+    // Decode the common effects up front; QSoundEffect loads asynchronously, so otherwise the
+    // first hover and first click are silent.
+    UiSounds::Preload();
     UpdateClock();
     clock_timer = new QTimer(this);
     connect(clock_timer, &QTimer::timeout, this, &HomeScreenWidget::UpdateClock);
@@ -1123,8 +1325,14 @@ void HomeScreenWidget::SetupUi() {
     });
     tile_list->setItemDelegate(tile_hover_delegate);
     tile_list->viewport()->installEventFilter(this);
-    connect(tile_list, &QListWidget::entered, this,
-            [this](const QModelIndex& index) { tile_hover_delegate->SetHoveredIndex(index); });
+    connect(tile_list, &QListWidget::entered, this, [this](const QModelIndex& index) {
+        // Only click when the hover actually moves to a different tile; QListWidget::entered
+        // re-fires on mouse movement within the same cell, which would otherwise buzz.
+        if (index != tile_hover_delegate->HoveredIndex()) {
+            UiSounds::Play(UiSounds::Name::Hover);
+        }
+        tile_hover_delegate->SetHoveredIndex(index);
+    });
 
     // Console-style activation: a single click launches, matching the home menu. Qt's
     // itemActivated only fires on the platform's double-click gesture, so itemClicked is the
@@ -1167,6 +1375,9 @@ void HomeScreenWidget::SetupUi() {
     connect(add_dir_button, &QToolButton::clicked, this, &HomeScreenWidget::AddDirectory);
     connect(wallpaper_button, &QToolButton::clicked, this, &HomeScreenWidget::OnChooseWallpaper);
     connect(power_button, &QToolButton::clicked, this, &HomeScreenWidget::PowerOff);
+    // Power off ends the session, so it gets the closing sound rather than a tab click.
+    power_button->setProperty(UiSounds::PressSoundProperty,
+                              QByteArray(UiSounds::Name::Finish));
 
     // The buttons are a fixed 51px inside a 61px-thick pill, so without an explicit alignment
     // they settle against the top-left corner of their slot instead of sitting on the pill's
@@ -1561,13 +1772,33 @@ bool HomeScreenWidget::eventFilter(QObject* watched, QEvent* event) {
                 drag_start_pos = me->pos();
                 QScrollBar* bar = tile_list->horizontalScrollBar();
                 drag_start_scroll = bar ? bar->value() : 0;
+                // Press-and-hold on a game tile picks it up for reordering. A press that moves
+                // before the hold elapses is a shelf pan instead, so both gestures coexist.
+                QListWidgetItem* pressed = tile_list->itemAt(me->pos());
+                if (pressed && !pressed->data(AddDirectoryRole).toBool()) {
+                    if (!long_press_timer) {
+                        long_press_timer = new QTimer(this);
+                        long_press_timer->setSingleShot(true);
+                        connect(long_press_timer, &QTimer::timeout, this,
+                                &HomeScreenWidget::BeginTileReorder);
+                    }
+                    long_press_timer->start(TileReorderHoldMs);
+                }
             }
         } else if (event->type() == QEvent::MouseMove) {
             auto* me = static_cast<QMouseEvent*>(event);
             if (me->buttons() & Qt::LeftButton) {
+                if (reorder_row >= 0) {
+                    UpdateTileReorder(me->pos());
+                    return true;
+                }
                 const int dx = me->pos().x() - drag_start_pos.x();
                 if (!shelf_dragging && std::abs(dx) > QApplication::startDragDistance()) {
                     shelf_dragging = true;
+                    // Moved before the hold completed, so this is a pan, not a pick-up.
+                    if (long_press_timer) {
+                        long_press_timer->stop();
+                    }
                     if (scroll_animation) {
                         scroll_animation->stop();
                     }
@@ -1581,6 +1812,14 @@ bool HomeScreenWidget::eventFilter(QObject* watched, QEvent* event) {
                 }
             }
         } else if (event->type() == QEvent::MouseButtonRelease) {
+            if (long_press_timer) {
+                long_press_timer->stop();
+            }
+            if (reorder_row >= 0) {
+                FinishTileReorder();
+                // Swallow the release so dropping a tile doesn't also launch the game.
+                return true;
+            }
             if (shelf_dragging) {
                 shelf_dragging = false;
                 return true;
@@ -1710,6 +1949,41 @@ void HomeScreenWidget::Refresh() {
     std::vector<QStandardItem*> game_items;
     CollectGameItems(source_model->invisibleRootItem(), game_items);
 
+    // Drop games the user removed from the library. Their ROMs are still on disk and still in
+    // the scanned folder, so they reappear in the model on every rescan.
+    if (!removed_games.isEmpty()) {
+        game_items.erase(
+            std::remove_if(game_items.begin(), game_items.end(),
+                           [this](QStandardItem* item) {
+                               return removed_games.contains(
+                                   item->data(GameListItemPath::FullPathRole).toString());
+                           }),
+            game_items.end());
+    }
+
+    // Apply the user's drag order. Arranged tiles come first in their chosen order; anything
+    // not yet arranged (a newly added ROM) keeps scan order and follows after.
+    if (!tile_order.isEmpty()) {
+        std::stable_sort(game_items.begin(), game_items.end(),
+                         [this](QStandardItem* lhs, QStandardItem* rhs) {
+                             const int l = tile_order.indexOf(
+                                 lhs->data(GameListItemPath::FullPathRole).toString());
+                             const int r = tile_order.indexOf(
+                                 rhs->data(GameListItemPath::FullPathRole).toString());
+                             if (l == r) {
+                                 return false;
+                             }
+                             // -1 (unarranged) sorts last rather than first.
+                             if (l < 0) {
+                                 return false;
+                             }
+                             if (r < 0) {
+                                 return true;
+                             }
+                             return l < r;
+                         });
+    }
+
     int games_added = 0;
     for (QStandardItem* item : game_items) {
         const QString full_path = item->data(GameListItemPath::FullPathRole).toString();
@@ -1794,7 +2068,16 @@ void HomeScreenWidget::OnChooseWallpaper() {
     if (image_path.isEmpty()) {
         return;
     }
-    UISettings::values.home_background_path = image_path;
+    // Copy the wallpaper into app data like custom covers, so the background keeps working if
+    // the user moves or deletes the image they picked.
+    const QString previous = UISettings::values.home_background_path;
+    UISettings::values.home_background_path =
+        StoreImageInAppData(image_path, BackgroundsDir(), QStringLiteral("wallpaper"));
+    if (previous.startsWith(BackgroundsDir()) &&
+        previous != UISettings::values.home_background_path) {
+        // Drop the superseded copy rather than accumulating old wallpapers.
+        QFile::remove(previous);
+    }
     ApplyAppearanceSettings();
     emit BackgroundImageChanged();
 }
@@ -1815,6 +2098,8 @@ void HomeScreenWidget::OnTileContextMenu(const QPoint& pos) {
     if (custom_covers.contains(full_path)) {
         clear_cover_action = menu.addAction(tr("Remove Custom Cover"));
     }
+    menu.addSeparator();
+    QAction* remove_game_action = menu.addAction(tr("Remove Game"));
 
     QAction* chosen = menu.exec(tile_list->mapToGlobal(pos));
     if (chosen == set_cover_action) {
@@ -1825,21 +2110,31 @@ void HomeScreenWidget::OnTileContextMenu(const QPoint& pos) {
             // Copy into our own user data folder rather than keeping a reference to wherever
             // the user picked it from, so the cover survives the source file moving/deleting
             // and travels with the app's user data.
-            const QString covers_dir = UserDataDir() + QStringLiteral("covers/");
-            QDir().mkpath(covers_dir);
-            const QString ext = QFileInfo(image_path).suffix();
-            const QString stored_path = covers_dir + QString::number(qHash(full_path), 16) +
-                                        (ext.isEmpty() ? QString() : QStringLiteral(".") + ext);
-            QFile::remove(stored_path);
-            QFile::copy(image_path, stored_path);
-            custom_covers.insert(full_path, stored_path);
+            DeleteStoredCover(full_path);
+            custom_covers.insert(
+                full_path, StoreImageInAppData(image_path, CoversDir(), ArtKeyFor(full_path)));
             SaveCustomCovers();
+            UiSounds::Play(UiSounds::Name::Sparkle);
             Refresh();
         }
     } else if (chosen == clear_cover_action) {
-        custom_covers.remove(full_path);
+        // Deletes the copied image too, so clearing a cover doesn't leave the file orphaned
+        // in app data forever.
+        DeleteStoredCover(full_path);
         SaveCustomCovers();
+        UiSounds::Play(UiSounds::Name::Back);
         Refresh();
+    } else if (chosen == remove_game_action) {
+        const auto reply = QMessageBox::question(
+            this, tr("Remove Game"),
+            tr("Remove \"%1\" from your library?\n\nThe ROM file itself will not be deleted — it "
+               "stays in its folder. Its custom cover will be removed.")
+                .arg(item->data(TileHoverDelegate::TitleRole).toString()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (reply == QMessageBox::Yes) {
+            UiSounds::Play(UiSounds::Name::NoClick);
+            RemoveGameFromLibrary(full_path);
+        }
     }
 }
 
@@ -1858,11 +2153,13 @@ void HomeScreenWidget::OnTileActivated(QListWidgetItem* item) {
                        [this] { tile_activation_locked = false; });
 
     if (item->data(AddDirectoryRole).toBool()) {
+        UiSounds::Play(UiSounds::Name::SelectMisc);
         emit AddDirectory();
         return;
     }
     const QString full_path = item->data(FullPathRole).toString();
     if (!full_path.isEmpty()) {
+        UiSounds::Play(UiSounds::Name::Select);
         emit GameChosen(full_path);
     }
 }

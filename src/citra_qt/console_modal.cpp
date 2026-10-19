@@ -2,6 +2,14 @@
 // Licensed under GPLv2 or any later version
 // Refer to the misc/licenses/gplv2.txt file included.
 
+#include <functional>
+#include <utility>
+#include <QAbstractAnimation>
+#include <QEasingCurve>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
+#include <QVariant>
+#include <QVariantAnimation>
 #include "citra_qt/console_modal.h"
 
 #include <algorithm>
@@ -26,6 +34,7 @@
 #include <QScrollArea>
 #include <QStyleHints>
 #include <QVBoxLayout>
+#include "citra_qt/uisounds.h"
 #include "citra_qt/uisettings.h"
 
 namespace ConsoleUI {
@@ -202,6 +211,11 @@ static QString EscapeButtonLabel(const QString& text) {
 
 class BaseConsoleModal : public QWidget {
 public:
+    /// Panels come in fast and leave faster; a slow close makes the whole UI feel sluggish
+    /// even when the open felt fine.
+    static constexpr int PopInMs = 150;
+    static constexpr int PopOutMs = 110;
+
     explicit BaseConsoleModal(QWidget* parent, bool allow_outside_click = true)
         : QWidget(ResolveParent(parent)), dismiss_on_backdrop_click(allow_outside_click) {
         setAttribute(Qt::WA_TranslucentBackground, true);
@@ -281,6 +295,7 @@ public:
         show();
         raise();
         setFocus();
+        AnimateIn();
 
         QEventLoop loop;
         m_loop = &loop;
@@ -299,21 +314,92 @@ public:
 
     void Accept(int result = 0) {
         m_result = result;
-        hide();
-        if (m_loop && m_loop->isRunning()) {
-            m_loop->quit();
-        }
+        AnimateOutThenClose();
     }
 
     void Reject() {
         m_result = -1;
-        hide();
-        if (m_loop && m_loop->isRunning()) {
-            m_loop->quit();
-        }
+        AnimateOutThenClose();
     }
 
 protected:
+    /// Fades the card in and the backdrop up. The card lives inside a QVBoxLayout, so its
+    /// position and size are owned by the layout; opacity is animated instead of geometry
+    /// because a pos()/resize() tween would be undone on the next layout pass.
+    void AnimateIn() {
+        UiSounds::Play(UiSounds::Name::Notice);
+
+        backdrop_progress = 0.0;
+        StartBackdropAnimation(0.0, 1.0, PopInMs, QEasingCurve::OutCubic, {});
+
+        if (!card_widget) {
+            return;
+        }
+        auto* fade = new QGraphicsOpacityEffect(card_widget);
+        fade->setOpacity(0.0);
+        card_widget->setGraphicsEffect(fade);
+        auto* card_anim = new QPropertyAnimation(fade, "opacity", this);
+        card_anim->setDuration(PopInMs);
+        card_anim->setStartValue(0.0);
+        card_anim->setEndValue(1.0);
+        card_anim->setEasingCurve(QEasingCurve::OutCubic);
+        // Drop the effect once it is fully opaque: leaving a graphics effect installed forces
+        // the card through an offscreen render target for the rest of its life.
+        connect(card_anim, &QPropertyAnimation::finished, this, [this] {
+            if (card_widget) {
+                card_widget->setGraphicsEffect(nullptr);
+            }
+        });
+        card_anim->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+
+    /// Fades back out before releasing the event loop, so the panel visibly closes instead of
+    /// vanishing between frames.
+    void AnimateOutThenClose() {
+        if (closing) {
+            return;
+        }
+        closing = true;
+        UiSounds::Play(UiSounds::Name::Back);
+
+        if (card_widget) {
+            auto* fade = new QGraphicsOpacityEffect(card_widget);
+            card_widget->setGraphicsEffect(fade);
+            auto* card_anim = new QPropertyAnimation(fade, "opacity", this);
+            card_anim->setDuration(PopOutMs);
+            card_anim->setStartValue(1.0);
+            card_anim->setEndValue(0.0);
+            card_anim->setEasingCurve(QEasingCurve::InCubic);
+            card_anim->start(QAbstractAnimation::DeleteWhenStopped);
+        }
+
+        StartBackdropAnimation(backdrop_progress, 0.0, PopOutMs, QEasingCurve::InCubic, [this] {
+            hide();
+            if (m_loop && m_loop->isRunning()) {
+                m_loop->quit();
+            }
+        });
+    }
+
+    /// Drives `backdrop_progress` without needing a Q_OBJECT/Q_PROPERTY on this class, which
+    /// a .cpp-local type cannot have without also including its moc output.
+    void StartBackdropAnimation(qreal from, qreal to, int duration, QEasingCurve::Type easing,
+                                std::function<void()> on_finished) {
+        auto* anim = new QVariantAnimation(this);
+        anim->setDuration(duration);
+        anim->setStartValue(from);
+        anim->setEndValue(to);
+        anim->setEasingCurve(easing);
+        connect(anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
+            backdrop_progress = value.toReal();
+            update();
+        });
+        if (on_finished) {
+            connect(anim, &QVariantAnimation::finished, this, std::move(on_finished));
+        }
+        anim->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+
     bool eventFilter(QObject* watched, QEvent* event) override {
         if (watched == parentWidget() && event->type() == QEvent::Resize) {
             setGeometry(parentWidget()->rect());
@@ -324,8 +410,11 @@ protected:
     void paintEvent(QPaintEvent* event) override {
         Q_UNUSED(event);
         QPainter p(this);
-        p.fillRect(rect(), backdrop_color);
+        QColor backdrop = backdrop_color;
+        backdrop.setAlphaF(backdrop.alphaF() * qBound(0.0, backdrop_progress, 1.0));
+        p.fillRect(rect(), backdrop);
     }
+
 
     void mousePressEvent(QMouseEvent* event) override {
         if (card_widget && !card_widget->geometry().contains(event->pos())) {
@@ -353,6 +442,10 @@ public:
 private:
     int m_result = -1;
     QEventLoop* m_loop = nullptr;
+    qreal backdrop_progress = 1.0;
+    /// Guards against a second dismissal arriving during the close animation (an Escape press
+    /// landing while the fade is already running would otherwise quit the loop twice).
+    bool closing = false;
 };
 
 int ShowChoiceModal(QWidget* parent, const QString& title, const QString& subtitle,

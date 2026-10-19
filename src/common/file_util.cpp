@@ -930,6 +930,54 @@ const std::string GetHomeDirectory() {
 namespace {
 std::unordered_map<UserPath, std::string> g_paths;
 std::unordered_map<UserPath, std::string> g_default_paths;
+
+#if defined(__APPLE__)
+/**
+ * Moves save states written by older builds into the user directory.
+ * Those builds stored states in Contents/Resources/.states inside the app bundle, where they
+ * invalidated the code signature and were lost on any reinstall. Existing states are only
+ * moved if the destination has no file of that name, so a newer state is never overwritten.
+ */
+void MigrateBundleStatesToUserDirectory(const std::string& states_dir) {
+    const auto bundle_dir = GetBundleDirectory();
+    if (!bundle_dir) {
+        return;
+    }
+    const std::string legacy_dir =
+        bundle_dir.value() + "Contents" DIR_SEP "Resources" DIR_SEP ".states" DIR_SEP;
+    if (!IsDirectory(legacy_dir)) {
+        return;
+    }
+
+    bool all_moved = true;
+    ForeachDirectoryEntry(
+        nullptr, legacy_dir,
+        [&states_dir, &all_moved](u64*, const std::string& directory,
+                                  const std::string& virtual_name) -> bool {
+            const std::string source = directory + DIR_SEP + virtual_name;
+            if (IsDirectory(source)) {
+                return true;
+            }
+            const std::string destination = states_dir + virtual_name;
+            if (Exists(destination)) {
+                // A state already exists under the new location; leave both alone.
+                all_moved = false;
+                return true;
+            }
+            if (!CreateFullPath(states_dir) || !Rename(source, destination)) {
+                LOG_ERROR(Common_Filesystem, "Failed to migrate save state {} to {}", source,
+                          destination);
+                all_moved = false;
+            }
+            return true;
+        });
+
+    if (all_moved) {
+        // Only remove the bundle directory once everything is safely relocated.
+        DeleteDirRecursively(legacy_dir);
+    }
+}
+#endif
 } // namespace
 
 void SetUserPath(const std::string& path) {
@@ -1030,19 +1078,13 @@ void SetUserPath(const std::string& path) {
     g_paths.emplace(UserPath::ShaderDir, user_path + SHADER_DIR DIR_SEP);
     g_paths.emplace(UserPath::DumpDir, user_path + DUMP_DIR DIR_SEP);
     g_paths.emplace(UserPath::LoadDir, user_path + LOAD_DIR DIR_SEP);
+    // Save states always live in the user directory. Earlier macOS builds hid them inside
+    // Contents/Resources/.states in the app bundle, which broke the code signature on every
+    // save and silently discarded every state on reinstall or re-sign.
+    const std::string states_dir = user_path + STATES_DIR DIR_SEP;
+    g_paths.emplace(UserPath::StatesDir, states_dir);
 #if defined(__APPLE__)
-    auto bundle_dir = GetBundleDirectory();
-    std::string hidden_bundle_states;
-    if (bundle_dir) {
-        hidden_bundle_states = bundle_dir.value() + "Contents" DIR_SEP "Resources" DIR_SEP ".states" DIR_SEP;
-    }
-    if (!hidden_bundle_states.empty() && (FileUtil::IsDirectory(hidden_bundle_states) || FileUtil::CreateFullPath(hidden_bundle_states))) {
-        g_paths.emplace(UserPath::StatesDir, hidden_bundle_states);
-    } else {
-        g_paths.emplace(UserPath::StatesDir, user_path + STATES_DIR DIR_SEP);
-    }
-#else
-    g_paths.emplace(UserPath::StatesDir, user_path + STATES_DIR DIR_SEP);
+    MigrateBundleStatesToUserDirectory(states_dir);
 #endif
     g_paths.emplace(UserPath::IconsDir, user_path + ICONS_DIR DIR_SEP);
     g_default_paths = g_paths;

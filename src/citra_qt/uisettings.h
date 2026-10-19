@@ -88,6 +88,13 @@ struct Values {
 
     Settings::Setting<bool> confirm_before_closing{true, Settings::Keys::confirmClose};
     Settings::Setting<bool> save_state_warning{true, Settings::Keys::saveStateWarning};
+    /// Minutes between automatic auto-resume saves while a game runs. 0 disables autosaving.
+    Settings::Setting<u32> autosave_interval_minutes{10,
+                                                     Settings::Keys::autoSaveIntervalMinutes};
+    /// Interface sound effects for hover/select/drag on the console-style UI.
+    Settings::Setting<bool> ui_sounds_enabled{true, Settings::Keys::uiSoundsEnabled};
+    /// Interface sound effect volume, 0-100.
+    Settings::Setting<u32> ui_sounds_volume{50, Settings::Keys::uiSoundsVolume};
     Settings::Setting<bool> first_start{true, Settings::Keys::firstStart};
     Settings::Setting<bool> pause_when_in_background{false, Settings::Keys::pauseWhenInBackground};
     Settings::Setting<bool> mute_when_in_background{false, Settings::Keys::muteWhenInBackground};

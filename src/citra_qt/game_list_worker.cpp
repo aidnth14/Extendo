@@ -28,6 +28,13 @@ bool HasSupportedFileExtension(const std::string& file_name) {
     const QFileInfo file = QFileInfo(QString::fromStdString(file_name));
     return GameList::supported_file_extensions.contains(file.suffix(), Qt::CaseInsensitive);
 }
+
+/// Resolves symlinks and relative segments so the same file reached through two different paths
+/// compares equal. Falls back to the original path if the file cannot be resolved.
+std::string CanonicalPath(const std::string& path) {
+    const QString canonical = QFileInfo(QString::fromStdString(path)).canonicalFilePath();
+    return canonical.isEmpty() ? path : canonical.toStdString();
+}
 } // Anonymous namespace
 
 GameListWorker::GameListWorker(QVector<UISettings::GameDir>& game_dirs,
@@ -52,6 +59,11 @@ void GameListWorker::AddFstEntriesToGameList(const std::string& dir_path, unsign
         const std::string physical_name = directory + DIR_SEP + virtual_name;
         const bool is_dir = FileUtil::IsDirectory(physical_name);
         if (!is_dir && HasSupportedFileExtension(physical_name)) {
+            if (!emitted_titles.insert(CanonicalPath(physical_name)).second) {
+                // Already listed via another game dir that resolves to this same file.
+                return true;
+            }
+
             std::unique_ptr<Loader::AppLoader> loader = Loader::GetLoader(physical_name);
             if (!loader) {
                 return true;
@@ -110,6 +122,10 @@ void GameListWorker::AddFstEntriesToGameList(const std::string& dir_path, unsign
                 parent_dir);
 
         } else if (is_dir && recursion > 0) {
+            if (!emitted_titles.insert(CanonicalPath(physical_name)).second) {
+                // Already walked; also stops a symlink loop from recursing until depth runs out.
+                return true;
+            }
             watch_list.append(QString::fromStdString(physical_name));
             AddFstEntriesToGameList(physical_name, recursion - 1, parent_dir, media_type);
         }
@@ -122,6 +138,7 @@ void GameListWorker::AddFstEntriesToGameList(const std::string& dir_path, unsign
 
 void GameListWorker::run() {
     stop_processing = false;
+    emitted_titles.clear();
     for (UISettings::GameDir& game_dir : game_dirs) {
         if (game_dir.path == QStringLiteral("INSTALLED")) {
             QString games_path =
