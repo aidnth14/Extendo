@@ -362,23 +362,13 @@ protected:
         closing = true;
         UiSounds::Play(UiSounds::Name::Back);
 
-        if (card_widget) {
-            auto* fade = new QGraphicsOpacityEffect(card_widget);
-            card_widget->setGraphicsEffect(fade);
-            auto* card_anim = new QPropertyAnimation(fade, "opacity", this);
-            card_anim->setDuration(PopOutMs);
-            card_anim->setStartValue(1.0);
-            card_anim->setEndValue(0.0);
-            card_anim->setEasingCurve(QEasingCurve::InCubic);
-            card_anim->start(QAbstractAnimation::DeleteWhenStopped);
+        // The event loop is released synchronously. Deferring it until a close animation
+        // finished left a window in which a second dismissal could arrive and run the caller's
+        // post-modal work twice, which tore the emulated process down twice and aborted.
+        hide();
+        if (m_loop && m_loop->isRunning()) {
+            m_loop->quit();
         }
-
-        StartBackdropAnimation(backdrop_progress, 0.0, PopOutMs, QEasingCurve::InCubic, [this] {
-            hide();
-            if (m_loop && m_loop->isRunning()) {
-                m_loop->quit();
-            }
-        });
     }
 
     /// Drives `backdrop_progress` without needing a Q_OBJECT/Q_PROPERTY on this class, which

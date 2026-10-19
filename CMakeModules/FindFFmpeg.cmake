@@ -56,7 +56,12 @@ elseif (DEFINED FFmpeg_FIND_VERSION)
 else ()
   set(_FFmpeg_REQUIRED_VERSION 0)
 endif ()
-set(_FFmpeg_ALL_COMPONENTS AVCODEC AVDEVICE AVFORMAT AVUTIL POSTPROC SWSCALE SWRESAMPLE AVFILTER)
+# AVDEVICE is deliberately absent. Nothing here requests it -- video dumping writes files
+# through avformat/avcodec and never opens a capture device -- but this list is what gets
+# aggregated into FFMPEG_LIBRARIES below, so merely probing it got it linked. On macOS
+# libavdevice links the SDL2 *dylib* while this project links SDL2 statically, and two SDL2
+# copies in one process make SDL_DYNAPI_entry abort during startup.
+set(_FFmpeg_ALL_COMPONENTS AVCODEC AVFORMAT AVUTIL POSTPROC SWSCALE SWRESAMPLE AVFILTER)
 
 #
 ### Macro: set_component_found
