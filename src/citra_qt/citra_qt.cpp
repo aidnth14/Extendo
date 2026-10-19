@@ -4361,6 +4361,7 @@ static QString GetProfileLanguageText(Core::System& system) {
 }
 
 static QString GetProfileDobText(Core::System& system) {
+    const int year = UISettings::values.profile_birthyear;
     int m = UISettings::values.profile_birthmonth;
     int d = UISettings::values.profile_birthday;
     if (m < 1 || m > 12 || d < 1 || d > 31) {
@@ -4374,7 +4375,8 @@ static QString GetProfileDobText(Core::System& system) {
         }
     }
     if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
-        return QLocale().toString(QDate(2000, m, d), QCoreApplication::translate("GMainWindow", "MMMM d"));
+        return QLocale().toString(QDate(year, m, d),
+                                  QCoreApplication::translate("GMainWindow", "MMMM d, yyyy"));
     }
     return QCoreApplication::translate("GMainWindow", "January 1");
 }
@@ -4756,17 +4758,35 @@ void GMainWindow::ShowProfileOverlay() {
                 auto res = ConsoleUI::ShowDateModal(
                     this, tr("Date of Birth"),
                     tr("Select your birthday:"), cur_m, cur_d);
-                if (res) {
-                    auto [picked_m, picked_d] = *res;
-                    UISettings::values.profile_birthmonth = picked_m;
-                    UISettings::values.profile_birthday = picked_d;
-                    config->Save();
-                    if (cfg) {
-                        cfg->SetBirthday(static_cast<u8>(picked_m), static_cast<u8>(picked_d));
-                        cfg->UpdateConfigNANDSavegame();
-                    }
-                    row_dob.val_lbl->setText(GetProfileDobText(system));
+                if (!res) {
+                    return;
                 }
+                auto [picked_m, picked_d] = *res;
+
+                // The console config block has no year field, so it is asked for separately
+                // and kept as frontend data.
+                QStringList years;
+                const int this_year = QDate::currentDate().year();
+                for (int y = this_year; y >= this_year - 120; --y) {
+                    years.append(QString::number(y));
+                }
+                const int current_year =
+                    qBound(this_year - 120, UISettings::values.profile_birthyear, this_year);
+                const int picked_index =
+                    ConsoleUI::ShowChoiceModal(this, tr("Year of Birth"), tr("Select your birth year:"),
+                                               years, this_year - current_year);
+                if (picked_index >= 0 && picked_index < years.size()) {
+                    UISettings::values.profile_birthyear = years.at(picked_index).toInt();
+                }
+
+                UISettings::values.profile_birthmonth = picked_m;
+                UISettings::values.profile_birthday = picked_d;
+                config->Save();
+                if (cfg) {
+                    cfg->SetBirthday(static_cast<u8>(picked_m), static_cast<u8>(picked_d));
+                    cfg->UpdateConfigNANDSavegame();
+                }
+                row_dob.val_lbl->setText(GetProfileDobText(system));
             });
 
     connect(row_gender.btn, &QPushButton::clicked, this,

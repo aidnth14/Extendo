@@ -883,6 +883,8 @@ void QtConfig::ReadUIValues() {
             ReadSetting(QStringLiteral("profile_birthmonth"), 1).toInt();
         UISettings::values.profile_birthday =
             ReadSetting(QStringLiteral("profile_birthday"), 1).toInt();
+        UISettings::values.profile_birthyear =
+            ReadSetting(QStringLiteral("profile_birthyear"), 2000).toInt();
 #ifdef ENABLE_DISCORD_RPC
         ReadBasicSetting(UISettings::values.enable_discord_presence);
 #endif
@@ -1442,6 +1444,8 @@ void QtConfig::SaveUIValues() {
         WriteSetting(QStringLiteral("profile_language"), UISettings::values.profile_language, 1);
         WriteSetting(QStringLiteral("profile_birthmonth"), UISettings::values.profile_birthmonth, 1);
         WriteSetting(QStringLiteral("profile_birthday"), UISettings::values.profile_birthday, 1);
+        WriteSetting(QStringLiteral("profile_birthyear"), UISettings::values.profile_birthyear,
+                     2000);
 #ifdef ENABLE_DISCORD_RPC
         WriteBasicSetting(UISettings::values.enable_discord_presence);
 #endif

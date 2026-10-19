@@ -163,6 +163,9 @@ struct Values {
     int profile_language = 1;
     int profile_birthmonth = 1;
     int profile_birthday = 1;
+    /// Birth year. The console's own config block stores only month and day, so this is kept
+    /// alongside it as frontend-only data rather than written back to the NAND savegame.
+    int profile_birthyear = 2000;
 
     // Shortcut name <Shortcut, context>
     std::vector<Shortcut> shortcuts;
