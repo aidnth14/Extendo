@@ -74,9 +74,48 @@ if (ENABLE_QT)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${PROJECT_SOURCE_DIR}/dist/ui_sounds"
                 "${HOME_ASSET_DEST}/ui_sounds"
-        COMMENT "Copying home screen icons, UI font and interface sounds into the app"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${HOME_ASSET_DEST}/avatar_studio"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PROJECT_SOURCE_DIR}/dist/avatar_studio"
+                "${HOME_ASSET_DEST}/avatar_studio"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${HOME_ASSET_DEST}/mii_resources"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${PROJECT_SOURCE_DIR}/dist/mii_resources"
+                "${HOME_ASSET_DEST}/mii_resources"
+        COMMENT "Copying home screen icons, UI font, interface sounds, and avatar studio into the app"
         VERBATIM
     )
+
+    if (APPLE AND NOT IOS)
+        # Ship the Mii renderer as its own nested .app with a static LSUIElement/LSBackgroundOnly
+        # Info.plist, instead of a flat binary dropped into Contents/MacOS. A flat binary inherits
+        # the main app's Info.plist (no LSUIElement), and the runtime activation-policy trick in
+        # main.cpp's HideFromDock() races against AppKit's own early registration once real
+        # rendering starts, losing intermittently and leaving a duplicate Dock icon. A static
+        # Info.plist read before the helper's code runs has no race to lose.
+        set(MII_ENGINE_BUNDLE_DIR "$<TARGET_BUNDLE_CONTENT_DIR:citra_meta>/Frameworks/mii_render_engine.app")
+        add_custom_command(TARGET citra_meta POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${MII_ENGINE_BUNDLE_DIR}/Contents/MacOS"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:mii_render_engine>"
+                    "${MII_ENGINE_BUNDLE_DIR}/Contents/MacOS/mii_render_engine"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${PROJECT_SOURCE_DIR}/dist/apple/MiiRenderEngineInfo.plist"
+                    "${MII_ENGINE_BUNDLE_DIR}/Contents/Info.plist"
+            COMMENT "Copying 3D mii engine into the app as a nested LSUIElement bundle"
+            VERBATIM
+        )
+    else()
+        add_custom_command(TARGET citra_meta POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:mii_render_engine>"
+                    "$<TARGET_FILE_DIR:citra_meta>/mii_render_engine"
+            COMMENT "Copying 3D mii engine into the app"
+            VERBATIM
+        )
+    endif()
+
+    add_dependencies(citra_meta mii_render_engine)
 
     # macOS privacy (TCC) grants are keyed on the code signature's designated requirement. A
     # linker-signed/ad-hoc binary has no stable identity — its requirement is the cdhash, which

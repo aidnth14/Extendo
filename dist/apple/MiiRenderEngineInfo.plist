@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>mii_render_engine</string>
+    <key>CFBundleIdentifier</key>
+    <string>org.extendo-emu.extendo.mii-render-engine</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleExecutable</key>
+    <string>mii_render_engine</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <!--
+        Declared statically so LaunchServices/AppKit never register this helper as a
+        foreground, Dock-visible app in the first place. The runtime NSApplicationActivationPolicy
+        trick in main.cpp (HideFromDock) races against AppKit's own early registration and loses
+        that race intermittently once real rendering starts; a static LSUIElement is read before
+        any of the helper's code runs, so there is no race to lose.
+    -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>LSBackgroundOnly</key>
+    <true/>
+</dict>
+</plist>
